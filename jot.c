@@ -115,10 +115,6 @@ static void jot_image_snapshot(GdkPaintable *p, GdkSnapshot *gs, double w, doubl
         gtk_snapshot_append_color(s, &grey, &edges[i]);
     if (JOT_IMAGE(p)->selected) {
         GdkRGBA *accent = adw_style_manager_get_accent_color_rgba(adw_style_manager_get_default());
-        GdkRGBA tint = *accent;
-        tint.alpha = 0.15f;
-        if (!highlighted)
-            gtk_snapshot_append_color(s, &tint, &r);
         const graphene_rect_t thick[] = {
             GRAPHENE_RECT_INIT(0, 0, w, 3), GRAPHENE_RECT_INIT(0, h - 3, w, 3),
             GRAPHENE_RECT_INIT(0, 0, 3, h), GRAPHENE_RECT_INIT(w - 3, 0, 3, h),
@@ -818,10 +814,25 @@ static JotImage *selected_image(void) {
     return JOT_IS_IMAGE(p) ? JOT_IMAGE(p) : NULL;
 }
 
-/* Outlines a selected image and enables the image actions (context menu, Ctrl+Shift+C). */
+static gboolean vim_image_cursor_mode(void); /* vim.c */
+
+/* The image being acted on: one selected by itself, or (outside insert mode) the one the cursor
+ * is on, which is how you "select" an image with the keyboard or a click. */
+static JotImage *current_image(void) {
+    JotImage *img = selected_image();
+    if (img || gtk_text_buffer_get_has_selection(J.buf) || !vim_image_cursor_mode())
+        return img;
+    GtkTextIter it;
+    cursor_iter(&it);
+    GdkPaintable *p = gtk_text_iter_get_paintable(&it);
+    return JOT_IS_IMAGE(p) ? JOT_IMAGE(p) : NULL;
+}
+
+/* Outlines the current image and enables the image actions (context menu, Ctrl+Shift+C). The
+ * text cursor is hidden while it's on an image: the outline is the cursor. */
 static void update_image_selection(void) {
     static JotImage *outlined;
-    JotImage *img = selected_image();
+    JotImage *img = current_image();
     if (img != outlined) {
         if (outlined) {
             outlined->selected = FALSE;
@@ -833,6 +844,7 @@ static void update_image_selection(void) {
             gdk_paintable_invalidate_contents(GDK_PAINTABLE(img));
         }
     }
+    gtk_text_view_set_cursor_visible(J.view, !img || selected_image() == img);
     if (!J.win)
         return;
     GAction *copy = g_action_map_lookup_action(G_ACTION_MAP(J.win), "copy-image-text");
@@ -1046,33 +1058,49 @@ static void open_image(JotImage *img) {
     gtk_file_launcher_launch(l, J.win, NULL, NULL, NULL);
 }
 
+/* The image under a point. GTK maps a point on an image's right half to the position after it,
+ * so check the characters on both sides against their actual rectangles. */
 static JotImage *image_at_point(double x, double y, GtkTextIter *it) {
-    if (!iter_at_point(x, y, it))
-        return NULL;
-    GdkPaintable *p = gtk_text_iter_get_paintable(it);
-    return JOT_IS_IMAGE(p) ? JOT_IMAGE(p) : NULL;
+    int bx, by;
+    gtk_text_view_window_to_buffer_coords(J.view, GTK_TEXT_WINDOW_WIDGET, (int)x, (int)y, &bx, &by);
+    GtkTextIter at;
+    gtk_text_view_get_iter_at_location(J.view, &at, bx, by);
+    for (int i = 0; i < 2; i++) {
+        GtkTextIter c = at;
+        if (i == 1 && !gtk_text_iter_backward_char(&c))
+            break;
+        GdkPaintable *p = gtk_text_iter_get_paintable(&c);
+        GdkRectangle r;
+        gtk_text_view_get_iter_location(J.view, &c, &r);
+        if (JOT_IS_IMAGE(p) && bx >= r.x && bx < r.x + r.width && by >= r.y && by < r.y + r.height) {
+            *it = c;
+            return JOT_IMAGE(p);
+        }
+    }
+    return NULL;
 }
 
-/* Double-click an image: open it in the image viewer. */
+/* Click an image to put the cursor on it (which selects it); double-click opens it. Clicking
+ * the right half of an image would otherwise put the cursor after it. */
 static void on_click(GtkGestureClick *g, int n_press, double x, double y, gpointer unused) {
     (void)unused;
     GtkTextIter it;
-    JotImage *img = n_press == 2 ? image_at_point(x, y, &it) : NULL;
+    JotImage *img = image_at_point(x, y, &it);
     if (!img)
         return;
     gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
-    open_image(img);
+    gtk_widget_grab_focus(GTK_WIDGET(J.view));
+    gtk_text_buffer_place_cursor(J.buf, &it);
+    if (n_press == 2)
+        open_image(img);
 }
 
-/* Right-click an image: select it, so the context menu's image items act on it. */
+/* Right-click an image: put the cursor on it, so the context menu's image items act on it. */
 static void on_right_click(GtkGestureClick *g, int n_press, double x, double y, gpointer unused) {
     (void)g, (void)n_press, (void)unused;
-    GtkTextIter it, next;
-    if (!image_at_point(x, y, &it))
-        return;
-    next = it;
-    gtk_text_iter_forward_char(&next);
-    gtk_text_buffer_select_range(J.buf, &it, &next);
+    GtkTextIter it;
+    if (image_at_point(x, y, &it) && !current_image())
+        gtk_text_buffer_place_cursor(J.buf, &it);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1395,19 +1423,15 @@ static gboolean find_match(const char *q, gboolean case_sensitive, const GtkText
 #define ACTION(name) static void act_##name(GSimpleAction *a, GVariant *p, gpointer d)
 #define UNUSED (void)a, (void)p, (void)d
 
-ACTION(find) {
-    UNUSED;
-    vim_search_prompt();
-}
 ACTION(copy_image_text) {
     UNUSED;
-    JotImage *img = selected_image();
+    JotImage *img = current_image();
     if (img)
         copy_image_text(img->path);
 }
 ACTION(open_image) {
     UNUSED;
-    JotImage *img = selected_image();
+    JotImage *img = current_image();
     if (img)
         open_image(img);
 }
@@ -1430,7 +1454,6 @@ ACTION(quit) {
 }
 
 static const GActionEntry win_actions[] = {
-    {"find", act_find, NULL, NULL, NULL, {0}},
     {"copy-image-text", act_copy_image_text, NULL, NULL, NULL, {0}},
     {"open-image", act_open_image, NULL, NULL, NULL, {0}},
     {"save", act_save, NULL, NULL, NULL, {0}},
@@ -1569,10 +1592,6 @@ static GtkWidget *build_header(void) {
     gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_btn), G_MENU_MODEL(menu));
     adw_header_bar_pack_end(ADW_HEADER_BAR(header), menu_btn);
 
-    GtkWidget *find_btn = gtk_button_new_from_icon_name("edit-find-symbolic");
-    gtk_widget_set_tooltip_text(find_btn, "Search (/)");
-    gtk_actionable_set_action_name(GTK_ACTIONABLE(find_btn), "win.find");
-    adw_header_bar_pack_end(ADW_HEADER_BAR(header), find_btn);
     return header;
 }
 

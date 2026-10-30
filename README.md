@@ -46,8 +46,9 @@ jot is modal, like vim. It opens in normal mode with the cursor at the end of th
   Up/Down for history. Ranges: `%`, `.`, `$`, `n`, `'<,'>`, `+n/-n`.
 - **Clipboard:** yank/delete/put use the system clipboard (like `clipboard=unnamedplus`), so `p`
   puts a screenshot you just took — on its own line below. `Ctrl+V` in insert mode pastes too.
-- **Images:** `gx` (or double-click) opens the image under the cursor; right-click an image →
-  Copy Text from Image (or `Ctrl+Shift+C` when it's selected).
+- **Images:** an image is selected (outlined) when the cursor is on it: move onto its line, or
+  click it. Then `yy` copies the image itself, `dd` deletes it, `gx` (or double-click) opens it,
+  and `Ctrl+Shift+C` (or right-click → Copy Text from Image) copies its OCR text.
 - Insert mode: `Esc`/`Ctrl+[` to leave, `Ctrl+W` deletes a word, `Ctrl+U` to the line start,
   `Tab` indents, Enter keeps indentation.
 - Not (yet): `.` repeat, macros, marks, named registers, block visual (`Ctrl+V`).

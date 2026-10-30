@@ -190,6 +190,11 @@ static void set_mode(Mode m) {
     V.mode = m;
     gtk_text_view_set_overwrite(J.view, m == MODE_NORMAL); /* block cursor */
     update_status();
+    update_image_selection(); /* the cursor selects an image in normal mode only */
+}
+
+static gboolean vim_image_cursor_mode(void) {
+    return V.mode == MODE_NORMAL;
 }
 
 static void set_cursor(GtkTextIter *it) {
@@ -455,17 +460,16 @@ static gboolean do_search(const char *q, gboolean fwd, int count, const GtkTextI
  * cursor goes on the image and jot outlines it and highlights the matching words itself. */
 static void clear_image_mark(void) {
     if (V.hl_image) {
-        V.hl_image->selected = FALSE;
         image_set_highlight(V.hl_image, NULL);
         g_clear_object(&V.hl_image);
     }
 }
 
+/* The cursor goes on the image (which outlines it); the matching words get highlighted. */
 static void mark_image(JotImage *img, const GtkTextIter *at, const char *q) {
     clear_image_mark();
     gtk_text_buffer_place_cursor(J.buf, at);
     V.hl_image = g_object_ref(img);
-    img->selected = TRUE;
     image_set_highlight(img, q);
 }
 
@@ -2276,9 +2280,3 @@ static void vim_init(void) {
     set_cursor(&it);
 }
 
-/* The header's search button: start a / search. */
-static void vim_search_prompt(void) {
-    if (V.mode == MODE_INSERT)
-        leave_insert();
-    cmdline_open('/', NULL);
-}

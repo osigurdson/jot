@@ -490,8 +490,8 @@ static gboolean step(gpointer unused) {
         CHECK(V.hl_image != NULL && cur_line() == 1, "n wraps back around to the image");
         feed("N");
         CHECK(V.hl_image == NULL && selection_line() == 2, "N wraps back to the text match");
-        feed("k");
-        CHECK(first_image() && !first_image()->selected, "outline goes away when the cursor moves on");
+        feed("gg");
+        CHECK(first_image() && !first_image()->selected, "outline goes away when the cursor moves off the image");
 
         /* Copy Text from Image (context menu / Ctrl+Shift+C) on the selected image */
         GtkTextIter a, b;
@@ -756,6 +756,33 @@ static gboolean step(gpointer unused) {
         feed("2d");
         CHECK(g_str_equal(gtk_label_get_text(V.showcmd_label), "2d"), "pending keys are shown");
         feed("\x1b");
+
+        /* ---- images: the cursor selects them ---- */
+        {
+            g_autoptr(GdkTexture) itex = make_texture(60, 30);
+            g_autofree char *rel = save_texture(itex);
+            g_autofree char *pg = g_strdup_printf("above\n![](%s)\nbelow", rel);
+            page_at(pg, 0, 0);
+            JotImage *img = first_image();
+            CHECK(img && !img->selected && gtk_text_view_get_cursor_visible(J.view), "image not selected from line 1");
+            feed("j");
+            CHECK(img && current_image() == img && img->selected, "j onto an image line selects (outlines) it");
+            CHECK(!gtk_text_view_get_cursor_visible(J.view), "...and the outline replaces the text cursor");
+            GAction *open = g_action_map_lookup_action(G_ACTION_MAP(J.win), "open-image");
+            CHECK(g_action_get_enabled(open), "image actions work on the image under the cursor");
+            feed("yy");
+            GdkContentFormats *f = gdk_clipboard_get_formats(gtk_widget_get_clipboard(GTK_WIDGET(J.view)));
+            CHECK(gdk_content_formats_contain_mime_type(f, "image/png"), "yy on an image line copies the image");
+            feed("j");
+            CHECK(!img->selected && gtk_text_view_get_cursor_visible(J.view) && !g_action_get_enabled(open),
+                  "moving off the image deselects it");
+            feed("ki");
+            CHECK(!img->selected, "insert mode doesn't select the image");
+            feed("\x1b");
+            CHECK(img->selected, "back in normal mode on the image, it's selected again");
+            feed("dd");
+            CHECK_PAGE("above\nbelow", "dd deletes the image line");
+        }
 
         /* ---- put (reads the clipboard asynchronously; checked next step) ---- */
         page_at("one\ntwo\nthree", 0, 0);
