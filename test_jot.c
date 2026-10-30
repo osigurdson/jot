@@ -426,7 +426,8 @@ static gboolean step(gpointer unused) {
     case 16: {
         JotImage *img = first_image();
         g_autofree char *side = img ? ocr_sidecar(img->path) : NULL;
-        if ((!side || !g_file_test(side, G_FILE_TEST_EXISTS)) && waited++ < 40) {
+        if ((!side || !g_file_test(side, G_FILE_TEST_EXISTS) || g_hash_table_contains(ocr_pending, img->path)) &&
+            waited++ < 40) {
             step_no--; /* waiting for paste + tesseract */
             break;
         }
@@ -441,21 +442,54 @@ static gboolean step(gpointer unused) {
         g_autofree char *page = g_strdup_printf("intro\n![](%s)\nlater: parse_config is called here", ocr_rel);
         page_at(page, 0, 0);
         feed("/segmentation\r");
-        JotImage *sel = selected_image();
-        CHECK(sel && sel->selected, "/ finds text inside an image and outlines it");
+        JotImage *sel = V.hl_image;
+        CHECK(sel && sel->selected && !gtk_text_buffer_get_has_selection(J.buf),
+              "/ finds text inside an image and outlines it (without a selection tint)");
         CHECK(g_str_has_prefix(gtk_label_get_text(V.mode_label), "in image: Segmentation"),
               "status line shows the matching image line: %s", gtk_label_get_text(V.mode_label));
+        {
+            g_autofree char *tsv = ocr_sidecar_ext(ocr_rel, ".tsv");
+            CHECK(g_file_test(tsv, G_FILE_TEST_EXISTS), "word positions saved in %s.tsv", ocr_rel);
+        }
+        /* The image is 720x110; "Segmentation" is the first word of the first line, at x=14 y=14. */
+        CHECK(sel && sel->hl && sel->hl->len == 1, "the matched word is highlighted (%u rects)",
+              sel && sel->hl ? sel->hl->len : 0);
+        if (sel && sel->hl && sel->hl->len) {
+            graphene_rect_t *r = &g_array_index(sel->hl, graphene_rect_t, 0);
+            CHECK(r->origin.x > 5 && r->origin.x < 30 && r->origin.y > 5 && r->origin.y < 30 && r->size.width > 80 &&
+                      r->size.width < 200 && r->size.height > 10 && r->size.height < 40,
+                  "highlight sits on the word (%.0f,%.0f %.0fx%.0f)", r->origin.x, r->origin.y, r->size.width,
+                  r->size.height);
+        }
+        page_at(page, 0, 0);
+        feed("/fault in parse\r");
+        sel = V.hl_image;
+        CHECK(sel && sel->hl && sel->hl->len == 1, "a phrase across words is one highlight");
+        if (sel && sel->hl && sel->hl->len) {
+            graphene_rect_t *r = &g_array_index(sel->hl, graphene_rect_t, 0);
+            CHECK(r->size.width > 120 && r->origin.x > 100, "...spanning the words (%.0f,%.0f %.0fx%.0f)",
+                  r->origin.x, r->origin.y, r->size.width, r->size.height);
+        }
+        page_at(page, 0, 0);
+        feed("/main.c\r");
+        sel = V.hl_image;
+        CHECK(sel && sel->hl && sel->hl->len == 1 && g_array_index(sel->hl, graphene_rect_t, 0).origin.y > 30,
+              "a match on the second line is highlighted there");
+        feed("j");
+        CHECK(first_image() && !first_image()->hl, "highlight clears when the cursor moves on");
         page_at(page, 0, 0);
         feed("/parse_config\r");
-        CHECK(selected_image() != NULL, "image match comes before a later text match");
+        CHECK(V.hl_image != NULL, "image match comes before a later text match");
+        CHECK(V.hl_image && V.hl_image->hl, "image match is highlighted");
         feed("n");
         t = selected_text();
-        CHECK(selected_image() == NULL && g_str_equal(t, "parse_config") && selection_line() == 2,
+        CHECK(V.hl_image == NULL && g_str_equal(t, "parse_config") && selection_line() == 2,
               "n goes on to the text match");
+        CHECK(first_image() && !first_image()->hl, "...and the image highlight goes away");
         feed("n");
-        CHECK(selected_image() != NULL, "n wraps back around to the image");
+        CHECK(V.hl_image != NULL && cur_line() == 1, "n wraps back around to the image");
         feed("N");
-        CHECK(selected_image() == NULL && selection_line() == 2, "N wraps back to the text match");
+        CHECK(V.hl_image == NULL && selection_line() == 2, "N wraps back to the text match");
         feed("k");
         CHECK(first_image() && !first_image()->selected, "outline goes away when the cursor moves on");
 

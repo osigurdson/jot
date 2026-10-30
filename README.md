@@ -14,7 +14,8 @@ GNOME already ships.
 - Opens with the cursor at the end, ready for the next note.
 - Line numbers in a gutter (logical lines, so they match `jot.md` in vim/grep); `:set nonu` hides them.
 - OCR (if `tesseract` is installed): text in screenshots is read in the background and
-  cached next to each image as `assets/x.png.txt`. `/` search finds text inside images, and
+  cached next to each image as `assets/x.png.txt` (word positions in `.tsv`). `/` search finds
+  text inside images and highlights the matching words in the screenshot, and
   right-click an image → **Copy Text from Image** (or select it and press Ctrl+Shift+C).
   Without tesseract these features just don't appear.
 

@@ -37,6 +37,7 @@ struct _JotImage {
     double scale;
     int max_w;
     gboolean selected; /* drawn with an accent outline (selection, find match) */
+    GArray *hl;        /* graphene_rect_t in texture pixels: search matches in the image's text */
 };
 
 /* (scale, max width) from the most recent layout; new images start with these until refit. */
@@ -70,10 +71,41 @@ static int jot_image_intrinsic_height(GdkPaintable *p) {
     return h;
 }
 
+/* Search matches inside the image: the rest of the image dims, and each match is a glowing
+ * yellow highlighter mark over the original pixels (like a PDF viewer's find). */
+static void draw_highlights(GtkSnapshot *s, JotImage *img, double w, double h) {
+    const GdkRGBA dim = {0, 0, 0, 0.30f};
+    const GdkRGBA fill = {0.965f, 0.827f, 0.176f, 0.50f}; /* Adwaita yellow 3 */
+    const GdkRGBA ring = {0.898f, 0.647f, 0.039f, 0.95f}; /* yellow 5 */
+    const GdkRGBA glow = {0.965f, 0.827f, 0.176f, 0.60f};
+    double sx = w / gdk_texture_get_width(img->texture), sy = h / gdk_texture_get_height(img->texture);
+    graphene_rect_t full = GRAPHENE_RECT_INIT(0, 0, w, h);
+    gtk_snapshot_append_color(s, &dim, &full);
+    for (guint i = 0; i < img->hl->len; i++) {
+        const graphene_rect_t *t = &g_array_index(img->hl, graphene_rect_t, i);
+        const double pad = 3;
+        graphene_rect_t r = GRAPHENE_RECT_INIT(t->origin.x * sx - pad, t->origin.y * sy - pad,
+                                               t->size.width * sx + 2 * pad, t->size.height * sy + 2 * pad);
+        if (!graphene_rect_intersection(&r, &full, &r))
+            continue;
+        GskRoundedRect rr;
+        gsk_rounded_rect_init_from_rect(&rr, &r, 4);
+        gtk_snapshot_append_outset_shadow(s, &rr, &glow, 0, 0, 1, 8);
+        gtk_snapshot_push_rounded_clip(s, &rr);
+        gtk_snapshot_append_scaled_texture(s, img->texture, GSK_SCALING_FILTER_TRILINEAR, &full);
+        gtk_snapshot_append_color(s, &fill, &r);
+        gtk_snapshot_pop(s);
+        gtk_snapshot_append_inset_shadow(s, &rr, &ring, 0, 0, 1.5f, 0);
+    }
+}
+
 static void jot_image_snapshot(GdkPaintable *p, GdkSnapshot *gs, double w, double h) {
     GtkSnapshot *s = GTK_SNAPSHOT(gs);
     graphene_rect_t r = GRAPHENE_RECT_INIT(0, 0, w, h);
     gtk_snapshot_append_scaled_texture(s, JOT_IMAGE(p)->texture, GSK_SCALING_FILTER_TRILINEAR, &r);
+    gboolean highlighted = JOT_IMAGE(p)->hl && JOT_IMAGE(p)->hl->len;
+    if (highlighted)
+        draw_highlights(s, JOT_IMAGE(p), w, h);
     const GdkRGBA grey = {0.5f, 0.5f, 0.5f, 0.35f};
     const graphene_rect_t edges[] = {
         GRAPHENE_RECT_INIT(0, 0, w, 1), GRAPHENE_RECT_INIT(0, h - 1, w, 1),
@@ -85,7 +117,8 @@ static void jot_image_snapshot(GdkPaintable *p, GdkSnapshot *gs, double w, doubl
         GdkRGBA *accent = adw_style_manager_get_accent_color_rgba(adw_style_manager_get_default());
         GdkRGBA tint = *accent;
         tint.alpha = 0.15f;
-        gtk_snapshot_append_color(s, &tint, &r);
+        if (!highlighted)
+            gtk_snapshot_append_color(s, &tint, &r);
         const graphene_rect_t thick[] = {
             GRAPHENE_RECT_INIT(0, 0, w, 3), GRAPHENE_RECT_INIT(0, h - 3, w, 3),
             GRAPHENE_RECT_INIT(0, 0, 3, h), GRAPHENE_RECT_INIT(w - 3, 0, 3, h),
@@ -105,6 +138,7 @@ static void jot_image_paintable_init(GdkPaintableInterface *iface) {
 static void jot_image_finalize(GObject *o) {
     JotImage *self = JOT_IMAGE(o);
     g_clear_object(&self->texture);
+    g_clear_pointer(&self->hl, g_array_unref);
     g_free(self->path);
     G_OBJECT_CLASS(jot_image_parent_class)->finalize(o);
 }
@@ -460,17 +494,24 @@ static gboolean on_close(GtkWindow *win, gpointer unused) {
 /* ------------------------------------------------------------------------- */
 
 /* The text of assets/x.png is cached next to it as assets/x.png.txt, so each image is read once
- * (and grep finds text inside screenshots). Without tesseract the feature quietly disappears. */
+ * (and grep finds text inside screenshots), with each word's position in assets/x.png.tsv (for
+ * highlighting search matches). Without tesseract the feature quietly disappears. */
 static char *tesseract_path;
 static GHashTable *ocr_text;    /* rel -> recognized text ("" = none) */
 static GHashTable *ocr_pending; /* rels queued or running */
+static GHashTable *ocr_failed;  /* rels tesseract couldn't read this session (not retried) */
+static GHashTable *ocr_words;   /* rel -> GPtrArray of OcrWord, parsed from the .tsv */
 static GQueue ocr_queue = G_QUEUE_INIT;
 static gboolean ocr_running;
 static char *ocr_copy_wanted; /* rel whose text goes to the clipboard once it's ready */
 
-static char *ocr_sidecar(const char *rel) {
+static char *ocr_sidecar_ext(const char *rel, const char *ext) {
     g_autofree char *abs = g_build_filename(notes_dir, rel, NULL);
-    return g_strconcat(abs, ".txt", NULL);
+    return g_strconcat(abs, ext, NULL);
+}
+
+static char *ocr_sidecar(const char *rel) {
+    return ocr_sidecar_ext(rel, ".txt");
 }
 
 /* The recognized text for rel, or NULL if it hasn't been read (yet). */
@@ -560,20 +601,23 @@ static void ocr_pump(void);
 
 static void ocr_done(GObject *src, GAsyncResult *res, gpointer data) {
     char *rel = data;
-    g_autoptr(GBytes) out = NULL;
     g_autoptr(GError) err = NULL;
     GSubprocess *proc = G_SUBPROCESS(src);
-    if (g_subprocess_communicate_finish(proc, res, &out, NULL, &err) && g_subprocess_get_successful(proc)) {
-        gsize len;
-        const char *raw = g_bytes_get_data(out, &len);
-        char *text = ocr_clean(raw ? raw : "", raw ? len : 0);
-        g_autofree char *side = ocr_sidecar(rel);
+    g_autofree char *side = ocr_sidecar(rel);
+    char *raw = NULL;
+    gsize len = 0;
+    if (g_subprocess_communicate_finish(proc, res, NULL, NULL, &err) && g_subprocess_get_successful(proc) &&
+        g_file_get_contents(side, &raw, &len, NULL)) {
+        char *text = ocr_clean(raw, len); /* tesseract wrote x.png.txt and x.png.tsv; tidy the .txt */
         g_file_set_contents(side, text, -1, NULL);
         g_hash_table_insert(ocr_text, g_strdup(rel), text);
+        g_hash_table_remove(ocr_words, rel);
     } else {
         /* Don't retry this session; no sidecar, so it's tried again next launch. */
         g_hash_table_insert(ocr_text, g_strdup(rel), g_strdup(""));
+        g_hash_table_add(ocr_failed, g_strdup(rel));
     }
+    g_free(raw);
     g_hash_table_remove(ocr_pending, rel);
     if (ocr_copy_wanted && g_str_equal(ocr_copy_wanted, rel)) {
         g_clear_pointer(&ocr_copy_wanted, g_free);
@@ -589,14 +633,16 @@ static void ocr_pump(void) {
         g_autofree char *rel = g_queue_pop_head(&ocr_queue);
         GdkTexture *tex = load_texture(rel);
         g_autoptr(GError) err = NULL;
+        g_autofree char *outbase = g_build_filename(notes_dir, rel, NULL); /* -> x.png.txt, x.png.tsv */
         g_autoptr(GSubprocess) proc =
-            tex ? g_subprocess_new(G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE |
+            tex ? g_subprocess_new(G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
                                        G_SUBPROCESS_FLAGS_STDERR_SILENCE,
-                                   &err, tesseract_path, "stdin", "stdout", "-l", "eng", "-c",
-                                   "preserve_interword_spaces=1", NULL)
+                                   &err, tesseract_path, "stdin", outbase, "-l", "eng", "-c",
+                                   "preserve_interword_spaces=1", "txt", "tsv", NULL)
                 : NULL;
         if (!proc) {
             g_hash_table_insert(ocr_text, g_strdup(rel), g_strdup(""));
+            g_hash_table_add(ocr_failed, g_strdup(rel));
             g_hash_table_remove(ocr_pending, rel);
             continue;
         }
@@ -607,8 +653,11 @@ static void ocr_pump(void) {
 }
 
 static void ocr_request(const char *rel) {
-    if (!tesseract_path || ocr_lookup(rel) || g_hash_table_contains(ocr_pending, rel))
+    if (!tesseract_path || g_hash_table_contains(ocr_pending, rel) || g_hash_table_contains(ocr_failed, rel))
         return;
+    g_autofree char *tsv = ocr_sidecar_ext(rel, ".tsv");
+    if (ocr_lookup(rel) && g_file_test(tsv, G_FILE_TEST_EXISTS))
+        return; /* already read (older versions didn't keep word positions; those are re-read) */
     g_hash_table_add(ocr_pending, g_strdup(rel));
     g_queue_push_tail(&ocr_queue, g_strdup(rel));
     ocr_pump();
@@ -646,6 +695,119 @@ static void copy_image_text(const char *rel) {
     toast("Copied text from image");
 }
 
+typedef struct {
+    int line;         /* tesseract's text line, numbered through the image */
+    double x, y, w, h; /* in texture pixels */
+    char *text;
+} OcrWord;
+
+static void ocr_word_free(OcrWord *w) {
+    g_free(w->text);
+    g_free(w);
+}
+
+/* The image's words with their positions, parsed from tesseract's TSV (cached). */
+static GPtrArray *ocr_words_for(JotImage *img) {
+    GPtrArray *words = g_hash_table_lookup(ocr_words, img->path);
+    if (words)
+        return words;
+    g_autofree char *path = ocr_sidecar_ext(img->path, ".tsv");
+    g_autofree char *data = NULL;
+    if (!g_file_get_contents(path, &data, NULL, NULL))
+        return NULL;
+    words = g_ptr_array_new_with_free_func((GDestroyNotify)ocr_word_free);
+    double scale = 1; /* tesseract saw the preprocessed (upscaled) image */
+    int line = -1;
+    g_auto(GStrv) rows = g_strsplit(data, "\n", -1);
+    for (int i = 0; rows[i]; i++) {
+        /* level page block par line word left top width height conf text */
+        g_auto(GStrv) f = g_strsplit(rows[i], "\t", 12);
+        if (g_strv_length(f) < 12)
+            continue;
+        int level = atoi(f[0]);
+        if (level == 1 && g_ascii_strtod(f[8], NULL) > 0) {
+            scale = gdk_texture_get_width(img->texture) / g_ascii_strtod(f[8], NULL);
+        } else if (level == 4) {
+            line++;
+        } else if (level == 5 && *g_strstrip(f[11])) {
+            OcrWord *w = g_new0(OcrWord, 1);
+            w->line = line;
+            w->x = g_ascii_strtod(f[6], NULL) * scale;
+            w->y = g_ascii_strtod(f[7], NULL) * scale;
+            w->w = g_ascii_strtod(f[8], NULL) * scale;
+            w->h = g_ascii_strtod(f[9], NULL) * scale;
+            w->text = g_strdup(f[11]);
+            g_ptr_array_add(words, w);
+        }
+    }
+    g_hash_table_insert(ocr_words, g_strdup(img->path), words);
+    return words;
+}
+
+/* Rects (texture pixels) over each occurrence of qfold (casefolded) in the image's text. A match
+ * within a word covers that part of it; a phrase across words on a line becomes one rect. */
+static GArray *ocr_highlights(JotImage *img, const char *qfold) {
+    GArray *out = g_array_new(FALSE, FALSE, sizeof(graphene_rect_t));
+    GPtrArray *words = ocr_words_for(img);
+    if (!words || !*qfold)
+        return out;
+    for (guint i = 0; i < words->len;) {
+        int line = ((OcrWord *)words->pdata[i])->line;
+        guint j = i;
+        while (j < words->len && ((OcrWord *)words->pdata[j])->line == line)
+            j++;
+        /* the line as casefolded words joined by spaces, remembering where each word sits */
+        GString *l = g_string_new(NULL);
+        g_autofree int *ws = g_new(int, j - i);
+        g_autofree int *we = g_new(int, j - i);
+        for (guint k = i; k < j; k++) {
+            if (k > i)
+                g_string_append_c(l, ' ');
+            g_autofree char *fold = g_utf8_casefold(((OcrWord *)words->pdata[k])->text, -1);
+            ws[k - i] = (int)l->len;
+            g_string_append(l, fold);
+            we[k - i] = (int)l->len;
+        }
+        for (const char *m = strstr(l->str, qfold); m; m = strstr(m + 1, qfold)) {
+            int ms = (int)(m - l->str), me = ms + (int)strlen(qfold);
+            graphene_rect_t u;
+            gboolean have = FALSE;
+            for (guint k = i; k < j; k++) {
+                int a = MAX(ms, ws[k - i]), b = MIN(me, we[k - i]);
+                if (a >= b)
+                    continue;
+                const OcrWord *w = words->pdata[k];
+                const char *wp = l->str + ws[k - i];
+                double len = MAX(1, g_utf8_strlen(wp, we[k - i] - ws[k - i]));
+                double fa = g_utf8_strlen(wp, a - ws[k - i]) / len, fb = g_utf8_strlen(wp, b - ws[k - i]) / len;
+                graphene_rect_t r = GRAPHENE_RECT_INIT(w->x + w->w * fa, w->y, w->w * (fb - fa), w->h);
+                if (have)
+                    graphene_rect_union(&u, &r, &u);
+                else
+                    u = r;
+                have = TRUE;
+            }
+            if (have)
+                g_array_append_val(out, u);
+        }
+        g_string_free(l, TRUE);
+        i = j;
+    }
+    return out;
+}
+
+/* Highlights where q occurs in the image's text (NULL clears). */
+static void image_set_highlight(JotImage *img, const char *q) {
+    g_clear_pointer(&img->hl, g_array_unref);
+    if (q && *q) {
+        g_autofree char *fold = g_utf8_casefold(q, -1);
+        img->hl = ocr_highlights(img, fold);
+        if (!img->hl->len)
+            g_clear_pointer(&img->hl, g_array_unref);
+    }
+    gdk_paintable_invalidate_contents(GDK_PAINTABLE(img));
+}
+
 /* The image, if the selection is exactly one image. */
 static JotImage *selected_image(void) {
     GtkTextIter s, e;
@@ -663,7 +825,7 @@ static void update_image_selection(void) {
     if (img != outlined) {
         if (outlined) {
             outlined->selected = FALSE;
-            gdk_paintable_invalidate_contents(GDK_PAINTABLE(outlined));
+            image_set_highlight(outlined, NULL); /* search highlights go when the cursor moves on */
         }
         g_set_object(&outlined, img);
         if (img) {
@@ -1472,6 +1634,8 @@ static void init_paths(void) {
     textures = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
     ocr_text = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     ocr_pending = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    ocr_failed = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    ocr_words = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_ptr_array_unref);
     tesseract_path = g_find_program_in_path("tesseract");
 }
 
