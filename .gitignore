@@ -1,0 +1,12 @@
+# build outputs
+/jot
+/test_jot
+*.o
+*.dSYM/
+
+# editor / OS cruft
+*.swp
+*~
+.vscode/
+.idea/
+.DS_Store
