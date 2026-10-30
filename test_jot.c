@@ -1,6 +1,8 @@
 /* Headless UI tests for jot. Run with `make check` (uses GTK's Broadway backend). */
 #define JOT_NO_MAIN
 #include "jot.c"
+#include "md.c"
+#include "vim.c"
 #include <pango/pangocairo.h>
 
 static int failures;

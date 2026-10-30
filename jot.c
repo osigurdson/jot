@@ -7,7 +7,7 @@
  * Editing is vim-style (modal); see vim.c.
  * Everything is monospace, paste is always plain text, nothing touches the network.
  */
-#include <adwaita.h>
+#include "jot.h"
 #ifdef GDK_WINDOWING_WAYLAND
 #include <gdk/wayland/gdkwayland.h>
 #endif
@@ -17,13 +17,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define APP_ID "dev.jot.Jot"
-#define OBJ_UTF8 "\xef\xbf\xbc" /* U+FFFC: what GtkTextBuffer reports for an embedded image */
-#define INDENT "    "
 #define SAVE_DELAY_MS 400
 #define DEFAULT_FONT_PT 11
 
-static char *notes_dir, *assets_dir, *page_path, *state_path;
+char *notes_dir, *page_path;
+static char *assets_dir, *state_path;
 static GRegex *img_re;
 static GHashTable *textures; /* absolute path -> GdkTexture */
 
@@ -31,19 +29,7 @@ static GHashTable *textures; /* absolute path -> GdkTexture */
 /* Inline images                                                              */
 /* ------------------------------------------------------------------------- */
 
-/* A texture shown at its true on-screen size (HiDPI aware), shrunk to fit the view. */
-#define JOT_TYPE_IMAGE (jot_image_get_type())
-G_DECLARE_FINAL_TYPE(JotImage, jot_image, JOT, IMAGE, GObject)
-
-struct _JotImage {
-    GObject parent;
-    GdkTexture *texture;
-    char *path; /* "assets/x.png", relative to notes_dir */
-    double scale;
-    int max_w;
-    gboolean selected; /* drawn with an accent outline (selection, find match) */
-    GArray *hl;        /* graphene_rect_t in texture pixels: search matches in the image's text */
-};
+/* JotImage (declared in jot.h): a texture shown at its true on-screen size, shrunk to fit. */
 
 /* (scale, max width) from the most recent layout; new images start with these until refit. */
 static double last_scale = 1.0;
@@ -200,7 +186,7 @@ static char *asset_name(const char *ext) {
 }
 
 /* Saves a texture into assets/ as PNG. Returns "assets/x.png" or NULL. */
-static char *save_texture(GdkTexture *tex) {
+char *save_texture(GdkTexture *tex) {
     g_autofree char *name = asset_name(".png");
     char *abs = g_build_filename(assets_dir, name, NULL);
     if (!gdk_texture_save_to_png(tex, abs)) {
@@ -243,7 +229,7 @@ static char *match_img_line(const char *line) {
 /* Buffer <-> text                                                            */
 /* ------------------------------------------------------------------------- */
 
-static char *serialize_range(GtkTextBuffer *buf, const GtkTextIter *start, const GtkTextIter *end) {
+char *serialize_range(GtkTextBuffer *buf, const GtkTextIter *start, const GtkTextIter *end) {
     g_autofree char *text = gtk_text_buffer_get_slice(buf, start, end, TRUE);
     GString *out = g_string_new(NULL);
     int offset = gtk_text_iter_get_offset(start);
@@ -274,14 +260,14 @@ static char *serialize_range(GtkTextBuffer *buf, const GtkTextIter *start, const
     return g_string_free(out, FALSE);
 }
 
-static char *serialize(GtkTextBuffer *buf) {
+char *serialize(GtkTextBuffer *buf) {
     GtkTextIter s, e;
     gtk_text_buffer_get_bounds(buf, &s, &e);
     return serialize_range(buf, &s, &e);
 }
 
 /* Inserts plain text at it; ![](assets/..) lines whose file exists become images. */
-static void insert_text(GtkTextBuffer *buf, GtkTextIter *it, const char *raw) {
+void insert_text(GtkTextBuffer *buf, GtkTextIter *it, const char *raw) {
     g_autoptr(GString) t = g_string_new(raw);
     g_string_replace(t, "\r\n", "\n", 0);
     g_string_replace(t, OBJ_UTF8, "", 0);
@@ -312,22 +298,7 @@ static void insert_text(GtkTextBuffer *buf, GtkTextIter *it, const char *raw) {
 /* The page on disk + window state (single window app, so this is a global)   */
 /* ------------------------------------------------------------------------- */
 
-static struct {
-    GtkApplication *app;
-    GtkWindow *win;
-    GtkTextView *view;
-    GtkTextBuffer *buf;
-    AdwToastOverlay *toasts;
-    GtkCssProvider *css;
-    GtkWidget *gutter;
-    gboolean line_numbers;
-    GKeyFile *state;
-    char *last_saved;
-    gint64 mtime;
-    gboolean loading;
-    guint save_src;
-    int font_size;
-} J;
+Jot J;
 
 /* Modification time in microseconds, or -1 if the file doesn't exist. */
 static gint64 file_mtime(const char *path) {
@@ -348,13 +319,13 @@ static char *read_page(void) {
     return text;
 }
 
-static void toast(const char *msg) {
+void toast(const char *msg) {
     AdwToast *t = adw_toast_new(msg);
     adw_toast_set_timeout(t, 4);
     adw_toast_overlay_add_toast(J.toasts, t);
 }
 
-static void cursor_iter(GtkTextIter *it) {
+void cursor_iter(GtkTextIter *it) {
     gtk_text_buffer_get_iter_at_mark(J.buf, it, gtk_text_buffer_get_insert(J.buf));
 }
 
@@ -401,7 +372,7 @@ static void set_text(const char *text) {
     fit_images(NULL);
 }
 
-static void save(void) {
+void save(void) {
     g_clear_handle_id(&J.save_src, g_source_remove);
     g_autofree char *text = serialize(J.buf);
     if (g_str_equal(text, J.last_saved))
@@ -436,7 +407,7 @@ static void on_changed(GtkTextBuffer *buf, gpointer unused) {
 static void ocr_request_all(void);
 
 /* Loads the page and puts the cursor at the end, ready for the next note. */
-static void load_page(void) {
+void load_page(void) {
     g_autofree char *text = read_page();
     J.mtime = file_mtime(page_path);
     set_text(text);
@@ -468,8 +439,6 @@ static void on_active(GtkWindow *win, GParamSpec *ps, gpointer unused) {
     gtk_text_buffer_place_cursor(J.buf, &it);
     ocr_request_all();
 }
-
-static gboolean md_enabled(void); /* md.c */
 
 static void save_state(void) {
     GKeyFile *k = J.state;
@@ -801,7 +770,7 @@ static GArray *ocr_highlights(JotImage *img, const char *qfold) {
 }
 
 /* Highlights where q occurs in the image's text (NULL clears). */
-static void image_set_highlight(JotImage *img, const char *q) {
+void image_set_highlight(JotImage *img, const char *q) {
     g_clear_pointer(&img->hl, g_array_unref);
     if (q && *q) {
         g_autofree char *fold = g_utf8_casefold(q, -1);
@@ -822,8 +791,6 @@ static JotImage *selected_image(void) {
     return JOT_IS_IMAGE(p) ? JOT_IMAGE(p) : NULL;
 }
 
-static gboolean vim_image_cursor_mode(void); /* vim.c */
-
 /* The image being acted on: one selected by itself, or (outside insert mode) the one the cursor
  * is on, which is how you "select" an image with the keyboard or a click. */
 static JotImage *current_image(void) {
@@ -838,7 +805,7 @@ static JotImage *current_image(void) {
 
 /* Outlines the current image and enables the image actions (context menu, Ctrl+Shift+C). The
  * text cursor is hidden while it's on an image: the outline is the cursor. */
-static void update_image_selection(void) {
+void update_image_selection(void) {
     static JotImage *outlined;
     JotImage *img = current_image();
     if (img != outlined) {
@@ -873,13 +840,13 @@ static void on_selection_mark_set(GtkTextBuffer *buf, GtkTextIter *it, GtkTextMa
 /* Images in the buffer                                                       */
 /* ------------------------------------------------------------------------- */
 
-static void after_insert(void) {
+void after_insert(void) {
     fit_images(NULL);
     gtk_text_view_scroll_mark_onscreen(J.view, gtk_text_buffer_get_insert(J.buf));
 }
 
 /* Inserts images, each on its own line, at `at` (or replacing the selection when NULL). */
-static void insert_images(GPtrArray *rels, const GtkTextIter *at) {
+void insert_images(GPtrArray *rels, const GtkTextIter *at) {
     GtkTextIter it;
     gtk_text_buffer_begin_user_action(J.buf);
     if (at) {
@@ -994,7 +961,7 @@ static void on_paste(GtkTextView *view, gpointer unused) {
 }
 
 /* Puts text on the clipboard; a lone image also goes on as a real image, for other apps. */
-static void clipboard_set(const char *text, JotImage *lone_image) {
+void clipboard_set(const char *text, JotImage *lone_image) {
     GdkContentProvider *providers[2];
     guint n = 0;
     if (lone_image) {
@@ -1059,7 +1026,7 @@ static gboolean on_drop(GtkDropTarget *t, const GValue *value, double x, double 
 }
 
 /* Opens an image in the system image viewer (zoom, pan, copy...). */
-static void open_image(JotImage *img) {
+void open_image(JotImage *img) {
     g_autofree char *abs = g_build_filename(notes_dir, img->path, NULL);
     g_autoptr(GFile) file = g_file_new_for_path(abs);
     g_autoptr(GtkFileLauncher) l = gtk_file_launcher_new(file);
@@ -1087,8 +1054,6 @@ static JotImage *image_at_point(double x, double y, GtkTextIter *it) {
     }
     return NULL;
 }
-
-static gboolean md_open_url_at(const GtkTextIter *it); /* md.c */
 
 /* Click an image to put the cursor on it (which selects it); double-click opens it. Clicking
  * the right half of an image would otherwise put the cursor after it. Ctrl+click opens a link. */
@@ -1122,7 +1087,7 @@ static void on_right_click(GtkGestureClick *g, int n_press, double x, double y, 
 /* Keyboard editing                                                           */
 /* ------------------------------------------------------------------------- */
 
-static void indent_range(int first, int last, int direction) {
+void indent_range(int first, int last, int direction) {
     gtk_text_buffer_begin_user_action(J.buf);
     for (int ln = first; ln <= last; ln++) {
         GtkTextIter it, end;
@@ -1168,8 +1133,6 @@ static void replace_selection(const char *text) {
     gtk_text_buffer_insert_at_cursor(J.buf, text, -1);
     gtk_text_buffer_end_user_action(J.buf);
 }
-
-static gboolean vim_key(guint keyval, GdkModifierType mods);
 
 static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code, GdkModifierType mods, gpointer unused) {
     (void)c, (void)code, (void)unused;
@@ -1331,7 +1294,7 @@ static void on_gutter_mark_set(GtkTextBuffer *buf, GtkTextIter *it, GtkTextMark 
         gutter_redraw(); /* current-line highlight */
 }
 
-static void set_line_numbers(gboolean show) {
+void set_line_numbers(gboolean show) {
     J.line_numbers = show;
     gtk_text_view_set_gutter(J.view, GTK_TEXT_WINDOW_LEFT, show ? J.gutter : NULL);
     g_idle_add(fit_images, NULL);
@@ -1384,16 +1347,9 @@ static JotImage *find_in_images(const GtkTextIter *from, const GtkTextIter *limi
     }
 }
 
-typedef struct {
-    GtkTextIter start, end;
-    JotImage *img; /* set when the match is in an image's OCR text */
-    char *line;    /* ...and this is the matching line of that text (owned) */
-    gboolean wrapped;
-} Match;
-
 /* Finds q from `from` (inclusive going forward; before it going backward), in the text or in an
  * image's OCR text, wrapping around the end of the page. */
-static gboolean find_match(const char *q, gboolean case_sensitive, const GtkTextIter *from_in, gboolean forward,
+gboolean find_match(const char *q, gboolean case_sensitive, const GtkTextIter *from_in, gboolean forward,
                            Match *m) {
     if (!*q)
         return FALSE;
@@ -1429,8 +1385,6 @@ static gboolean find_match(const char *q, gboolean case_sensitive, const GtkText
     return FALSE;
 }
 
-#include "md.c"  /* light Markdown styling */
-#include "vim.c" /* vim-style modal editing; a unity build, so these share this file's statics */
 
 /* ------------------------------------------------------------------------- */
 /* Actions                                                                    */

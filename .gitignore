@@ -1,6 +1,7 @@
 # build outputs
 /jot
 /test_jot
+/compile_flags.txt
 *.o
 *.dSYM/
 

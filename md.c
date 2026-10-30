@@ -5,9 +5,10 @@
  * conservative because scratch notes are full of pasted code and logs: emphasis needs word
  * boundaries (a*b*c, snake_case, **kwargs stay plain), nothing is styled inside code, and image
  * lines are left alone. `:set nomd` turns it off.
- *
- * #included by jot.c (a unity build), so it uses jot.c's statics directly.
  */
+#include "jot.h"
+
+#include <string.h>
 
 enum {
     T_CODEBLOCK,
@@ -284,11 +285,11 @@ static void on_md_deleted(GtkTextBuffer *buf, GtkTextIter *s, GtkTextIter *e, gp
     md_dirty(line, line, line_is_fence(line));
 }
 
-static gboolean md_enabled(void) {
+gboolean md_enabled(void) {
     return M.enabled;
 }
 
-static void md_set_enabled(gboolean on) {
+void md_set_enabled(gboolean on) {
     M.enabled = on;
     GtkTextIter s, e;
     gtk_text_buffer_get_bounds(J.buf, &s, &e);
@@ -332,7 +333,7 @@ static void on_md_style(AdwStyleManager *sm, GParamSpec *ps, gpointer unused) {
     md_colors();
 }
 
-static void md_init(void) {
+void md_init(void) {
     static const char *names[N_TAGS] = {"md-codeblock", "md-code",   "md-quote", "md-heading",
                                         "md-bold",      "md-italic", "md-bullet", "md-quote-mark",
                                         "md-link",      "md-done",   "md-dim"};
@@ -410,7 +411,7 @@ static void url_launched(GObject *src, GAsyncResult *res, gpointer unused) {
 }
 
 /* Opens the link at `it` in the browser; FALSE if there's none. */
-static gboolean md_open_url_at(const GtkTextIter *it) {
+gboolean md_open_url_at(const GtkTextIter *it) {
     g_autofree char *url = md_url_at(it);
     if (!url)
         return FALSE;
@@ -420,7 +421,7 @@ static gboolean md_open_url_at(const GtkTextIter *it) {
 }
 
 /* The next (dir > 0) or previous heading line from `line`, skipping code blocks; -1 if none. */
-static int md_heading_line(int line, int dir) {
+int md_heading_line(int line, int dir) {
     int n = gtk_text_buffer_get_line_count(J.buf), found = -1;
     gboolean in_code = FALSE;
     for (int l = 0; l < n; l++) {

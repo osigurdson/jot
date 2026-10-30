@@ -1,8 +1,5 @@
 /* vim.c - vim-style modal editing for jot.
  *
- * #included by jot.c (a unity build), so it uses jot.c's statics directly: J, save(),
- * serialize_range(), insert_text(), insert_images(), find_match(), indent_range(), ...
- *
  * Keys arrive as unichar "tokens": printable characters as themselves; Esc, Enter, Backspace,
  * Tab and Ctrl+letter as their ASCII control codes. Normal/visual mode keys accumulate in
  * V.pending until they form a complete command ("d", "d2", "d2w" -> run).
@@ -10,6 +7,9 @@
  * Yank/delete/put use the system clipboard (like clipboard=unnamedplus), so `p` also puts a
  * screenshot. Not implemented: `.` repeat, macros, marks, named registers, block visual.
  */
+#include "jot.h"
+
+#include <string.h>
 
 #define K_ESC 0x1b
 #define K_CR '\r'
@@ -193,7 +193,7 @@ static void set_mode(Mode m) {
     update_image_selection(); /* the cursor selects an image in normal mode only */
 }
 
-static gboolean vim_image_cursor_mode(void) {
+gboolean vim_image_cursor_mode(void) {
     return V.mode == MODE_NORMAL;
 }
 
@@ -1702,7 +1702,7 @@ static void ex_command(const char *raw) {
         else if (g_str_equal(opt, "nomd") || g_str_equal(opt, "nomarkdown"))
             md_set_enabled(FALSE);
         else if (g_str_equal(opt, "md!") || g_str_equal(opt, "invmd") || g_str_equal(opt, "markdown!"))
-            md_set_enabled(!M.enabled);
+            md_set_enabled(!md_enabled());
         else {
             g_autofree char *msg = g_strdup_printf("E518: Unknown option: %s", opt);
             vim_message(msg, TRUE);
@@ -2196,7 +2196,7 @@ static void insert_delete_back(gboolean word) {
 
 /* Called first from jot.c's key handler. TRUE = handled (in normal/visual mode that's every key
  * that would otherwise type or edit). */
-static gboolean vim_key(guint keyval, GdkModifierType mods) {
+gboolean vim_key(guint keyval, GdkModifierType mods) {
     mods &= gtk_accelerator_get_default_mod_mask();
     gboolean ctrl = (mods & GDK_CONTROL_MASK) != 0;
     if (mods & (GDK_ALT_MASK | GDK_SUPER_MASK))
@@ -2258,7 +2258,7 @@ static void on_vim_mark_set(GtkTextBuffer *buf, GtkTextIter *it, GtkTextMark *ma
 
 /* The bottom bar: mode / messages on the left (or the : / ? command line), pending keys and
  * line,col on the right. */
-static GtkWidget *vim_build_bar(void) {
+GtkWidget *vim_build_bar(void) {
     GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
     gtk_widget_add_css_class(bar, "jot-statusline");
     gtk_widget_add_css_class(bar, "monospace"); /* the system monospace font, like the editor */
@@ -2298,7 +2298,7 @@ static GtkWidget *vim_build_bar(void) {
 }
 
 /* After the editor exists and the page is loaded: start in normal mode. */
-static void vim_init(void) {
+void vim_init(void) {
     if (!V.pending) {
         V.pending = g_string_new(NULL);
         V.history = g_ptr_array_new_with_free_func(g_free);

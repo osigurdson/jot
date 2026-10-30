@@ -4,12 +4,21 @@ CFLAGS  ?= -O2 -g
 CFLAGS  += -std=gnu11 -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LDLIBS  += $(shell pkg-config --libs $(PKGS)) -lm
 PREFIX  ?= $(HOME)/.local
+SRCS    := jot.c md.c vim.c
 
-jot: jot.c md.c vim.c
-	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+jot: $(SRCS:.c=.o)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-# Headless UI tests (GTK Broadway backend, nothing appears on screen).
-test_jot: test_jot.c jot.c md.c vim.c
+%.o: %.c jot.h compile_flags.txt
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# For clangd (editor diagnostics / go-to-definition): the same flags the build uses.
+compile_flags.txt: Makefile
+	@printf '%s\n' -std=gnu11 -Wall -Wextra $(shell pkg-config --cflags $(PKGS)) > $@
+
+# Headless UI tests (GTK Broadway backend, nothing appears on screen). test_jot.c #includes the
+# three .c files, so the tests can reach their internals (vim's mode, Markdown's tags...).
+test_jot: test_jot.c $(SRCS) jot.h
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $< $(LDLIBS)
 
 check: test_jot
@@ -28,6 +37,6 @@ uninstall:
 	rm -f $(PREFIX)/bin/jot $(PREFIX)/share/applications/dev.jot.Jot.desktop
 
 clean:
-	rm -f jot test_jot
+	rm -f jot test_jot *.o compile_flags.txt
 
 .PHONY: check install uninstall clean
