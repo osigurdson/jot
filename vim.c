@@ -692,6 +692,26 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
         }
         break;
     }
+    case ']':
+    case '[': { /* ]] [[: next / previous Markdown heading */
+        if (!*p)
+            return R_MORE;
+        if (next_char(&p) != c)
+            return R_BAD;
+        for (int i = 0; i < n; i++) {
+            int line = md_heading_line(gtk_text_iter_get_line(it), c == ']' ? 1 : -1);
+            if (line < 0) { /* none: like vim, go to the end / start */
+                if (c == ']')
+                    gtk_text_buffer_get_end_iter(J.buf, it);
+                else
+                    gtk_text_buffer_get_start_iter(J.buf, it);
+                gtk_text_iter_set_line_offset(it, 0);
+                break;
+            }
+            iter_line(it, line);
+        }
+        break;
+    }
     case '%': {
         GtkTextIter t = *it;
         gboolean open;
@@ -1672,6 +1692,12 @@ static void ex_command(const char *raw) {
             set_line_numbers(FALSE);
         else if (g_str_equal(opt, "nu!") || g_str_equal(opt, "invnu") || g_str_equal(opt, "number!"))
             set_line_numbers(!J.line_numbers);
+        else if (g_str_equal(opt, "md") || g_str_equal(opt, "markdown"))
+            md_set_enabled(TRUE);
+        else if (g_str_equal(opt, "nomd") || g_str_equal(opt, "nomarkdown"))
+            md_set_enabled(FALSE);
+        else if (g_str_equal(opt, "md!") || g_str_equal(opt, "invmd") || g_str_equal(opt, "markdown!"))
+            md_set_enabled(!M.enabled);
         else {
             g_autofree char *msg = g_strdup_printf("E518: Unknown option: %s", opt);
             vim_message(msg, TRUE);
@@ -2072,11 +2098,12 @@ static Res vim_exec(const char *keys) {
     case 'g':
         if (!*p)
             return R_MORE;
-        if (g_utf8_get_char(p) == 'x') { /* gx: open the image under the cursor */
+        if (g_utf8_get_char(p) == 'x') { /* gx: open the image or link under the cursor */
             GdkPaintable *img = gtk_text_iter_get_paintable(&cur);
-            if (!JOT_IS_IMAGE(img))
-                return R_BAD;
-            open_image(JOT_IMAGE(img));
+            if (JOT_IS_IMAGE(img))
+                open_image(JOT_IMAGE(img));
+            else if (!md_open_url_at(&cur))
+                vim_message("gx: no link or image under the cursor", TRUE);
             return R_DONE;
         }
         break;

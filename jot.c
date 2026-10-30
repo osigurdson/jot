@@ -464,6 +464,8 @@ static void on_active(GtkWindow *win, GParamSpec *ps, gpointer unused) {
     ocr_request_all();
 }
 
+static gboolean md_enabled(void); /* md.c */
+
 static void save_state(void) {
     GKeyFile *k = J.state;
     int w, h;
@@ -473,6 +475,7 @@ static void save_state(void) {
     g_key_file_set_boolean(k, "window", "maximized", gtk_window_is_maximized(J.win));
     g_key_file_set_integer(k, "window", "font_size", J.font_size);
     g_key_file_set_boolean(k, "window", "line_numbers", J.line_numbers);
+    g_key_file_set_boolean(k, "window", "markdown", md_enabled());
     g_autofree char *dir = g_path_get_dirname(state_path);
     g_mkdir_with_parents(dir, 0755);
     g_key_file_save_to_file(k, state_path, NULL);
@@ -1080,11 +1083,18 @@ static JotImage *image_at_point(double x, double y, GtkTextIter *it) {
     return NULL;
 }
 
+static gboolean md_open_url_at(const GtkTextIter *it); /* md.c */
+
 /* Click an image to put the cursor on it (which selects it); double-click opens it. Clicking
- * the right half of an image would otherwise put the cursor after it. */
+ * the right half of an image would otherwise put the cursor after it. Ctrl+click opens a link. */
 static void on_click(GtkGestureClick *g, int n_press, double x, double y, gpointer unused) {
     (void)unused;
     GtkTextIter it;
+    GdkModifierType mods = gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(g));
+    if ((mods & GDK_CONTROL_MASK) && n_press == 1 && iter_at_point(x, y, &it) && md_open_url_at(&it)) {
+        gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+        return;
+    }
     JotImage *img = image_at_point(x, y, &it);
     if (!img)
         return;
@@ -1414,7 +1424,8 @@ static gboolean find_match(const char *q, gboolean case_sensitive, const GtkText
     return FALSE;
 }
 
-#include "vim.c" /* vim-style modal editing; a unity build, so it shares this file's statics */
+#include "md.c"  /* light Markdown styling */
+#include "vim.c" /* vim-style modal editing; a unity build, so these share this file's statics */
 
 /* ------------------------------------------------------------------------- */
 /* Actions                                                                    */
@@ -1510,6 +1521,7 @@ static GtkWidget *build_editor(void) {
     gtk_widget_add_css_class(GTK_WIDGET(v), "jot");
     J.buf = gtk_text_view_get_buffer(v);
     g_signal_connect(J.buf, "changed", G_CALLBACK(on_changed), NULL);
+    md_init();
 
     J.gutter = g_object_new(JOT_TYPE_GUTTER, NULL);
     J.line_numbers = TRUE;
@@ -1631,6 +1643,7 @@ static void on_activate(GtkApplication *app, gpointer unused) {
 
     if (!state_bool("line_numbers", TRUE))
         set_line_numbers(FALSE);
+    md_set_enabled(state_bool("markdown", TRUE));
     load_page();
     vim_init();
     update_image_selection();

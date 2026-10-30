@@ -173,6 +173,21 @@ static char *page_text(void) {
 
 #define CHECK_POS(l, c, what) CHECK(cur_line() == (l) && cur_col() == (c), "%s -> %d,%d (got %d,%d)", what, l, c, cur_line(), cur_col())
 
+/* Whether md tag t covers the char at line, col (after styling catches up). */
+static gboolean has_tag(int line, int col, int t) {
+    md_flush(NULL);
+    GtkTextIter it;
+    gtk_text_buffer_get_iter_at_line_offset(J.buf, &it, line, col);
+    return gtk_text_iter_has_tag(&it, M.tag[t]);
+}
+
+static gboolean plain(int line, int col) {
+    for (int t = 0; t < N_TAGS; t++)
+        if (has_tag(line, col, t))
+            return FALSE;
+    return TRUE;
+}
+
 static char *selected_text(void) {
     GtkTextIter s, e;
     if (!gtk_text_buffer_get_selection_bounds(J.buf, &s, &e))
@@ -823,6 +838,88 @@ static gboolean step(gpointer unused) {
         g_autofree char *txt = page_text();
         g_autoptr(GRegex) re = g_regex_new("^above\n!\\[\\]\\(assets/[^)]+\\)\nbelow$", 0, 0, NULL);
         CHECK(g_regex_match(re, txt, 0, NULL), "p of a screenshot puts it on its own line below");
+        break;
+    }
+    case 24: {
+        /* ---- Markdown styling ---- */
+        CHECK(M.enabled, "markdown styling is on by default");
+        page_at("# Title here\n"
+                "**bold** and *it* and `co*de*` and _u_\n"
+                "a*b*c snake_case_name **kwargs 2 * 3 * 4 __init__\n"
+                "- item\n"
+                "12. numbered\n"
+                "- [x] done thing\n"
+                "- [ ] open thing\n"
+                "> quoted\n"
+                "see [docs](https://example.com/a) or https://gnome.org.\n"
+                "---",
+                0, 0);
+        CHECK(has_tag(0, 0, T_DIM) && !has_tag(0, 0, T_HEADING), "# marker dimmed");
+        CHECK(has_tag(0, 2, T_HEADING) && has_tag(0, 11, T_HEADING), "heading text styled");
+        CHECK(has_tag(1, 0, T_DIM) && has_tag(1, 2, T_BOLD) && !has_tag(1, 2, T_DIM) && has_tag(1, 7, T_DIM),
+              "**bold**: bold with dim markers");
+        CHECK(has_tag(1, 13, T_DIM) && has_tag(1, 14, T_ITALIC) && has_tag(1, 16, T_DIM), "*it*: italic");
+        CHECK(has_tag(1, 22, T_CODE) && has_tag(1, 22, T_DIM) && has_tag(1, 24, T_CODE) && !has_tag(1, 25, T_ITALIC),
+              "`code`: chip, dim backticks, nothing styled inside");
+        CHECK(has_tag(1, 36, T_ITALIC), "_u_: italic");
+        CHECK(plain(2, 2) && plain(2, 6) && plain(2, 12) && plain(2, 25) && plain(2, 27) && plain(2, 36) &&
+                  plain(2, 38) && plain(2, 44),
+              "conservative: a*b*c, snake_case_name, **kwargs, 2 * 3 * 4, __init__ stay plain");
+        CHECK(has_tag(3, 0, T_BULLET) && plain(3, 2), "- bullet colored, item text plain");
+        CHECK(has_tag(4, 0, T_BULLET) && has_tag(4, 2, T_BULLET) && plain(4, 4), "12. numbered marker colored");
+        CHECK(has_tag(5, 2, T_BULLET) && has_tag(5, 7, T_DONE), "- [x] done: box colored, text struck through");
+        CHECK(has_tag(6, 2, T_BULLET) && !has_tag(6, 7, T_DONE), "- [ ] open: not struck through");
+        CHECK(has_tag(7, 0, T_QUOTE_MARK) && has_tag(7, 3, T_QUOTE), "> quote");
+        CHECK(has_tag(8, 5, T_LINK) && has_tag(8, 4, T_DIM) && has_tag(8, 12, T_DIM) && !has_tag(8, 12, T_LINK),
+              "[docs](url): text is the link, the rest dimmed");
+        CHECK(has_tag(8, 37, T_LINK) && has_tag(8, 53, T_LINK) && !has_tag(8, 54, T_LINK),
+              "bare URL is a link, trailing period excluded");
+        CHECK(has_tag(9, 0, T_DIM), "--- rule dimmed");
+        GtkTextIter it;
+        gtk_text_buffer_get_iter_at_line_offset(J.buf, &it, 8, 6);
+        g_autofree char *u1 = md_url_at(&it);
+        gtk_text_buffer_get_iter_at_line_offset(J.buf, &it, 8, 45);
+        g_autofree char *u2 = md_url_at(&it);
+        CHECK(u1 && g_str_equal(u1, "https://example.com/a") && u2 && g_str_equal(u2, "https://gnome.org"),
+              "gx/Ctrl+click find the link's URL (%s, %s)", u1 ? u1 : "-", u2 ? u2 : "-");
+        g_autofree char *saved = page_text();
+        CHECK_PAGE(saved, "styling never changes the text");
+
+        /* code blocks, and fences opening/closing as they're edited */
+        page_at("before\n```\n# not a heading\n*not italic*\n```\n# after", 0, 0);
+        CHECK(has_tag(1, 0, T_CODEBLOCK) && has_tag(1, 0, T_DIM), "fence line: code block, dimmed");
+        CHECK(has_tag(2, 0, T_CODEBLOCK) && !has_tag(2, 2, T_HEADING) && !has_tag(3, 1, T_ITALIC),
+              "nothing styled inside a code block");
+        CHECK(!has_tag(5, 0, T_CODEBLOCK) && has_tag(5, 2, T_HEADING), "after the closing fence: styled again");
+        feed("jdd");
+        CHECK(has_tag(1, 2, T_HEADING) && !has_tag(1, 0, T_CODEBLOCK), "deleting the opening fence ends the block");
+        CHECK(has_tag(3, 0, T_CODEBLOCK) && has_tag(4, 0, T_CODEBLOCK), "...and the old closing fence opens a new one");
+        feed("O```\x1b");
+        CHECK(has_tag(2, 0, T_CODEBLOCK) && !has_tag(2, 2, T_HEADING) && !has_tag(5, 0, T_CODEBLOCK) &&
+                  has_tag(5, 2, T_HEADING),
+              "typing the fence back restores the block");
+        feed("o`x`\x1b");
+        CHECK(has_tag(3, 1, T_CODEBLOCK) && !has_tag(3, 1, T_CODE), "inline code inside a block isn't a chip");
+
+        /* ]] [[ jump between headings, skipping code blocks */
+        page_at("intro\n# One\ntext\n```\n# fake\n```\n## Two\nend", 0, 0);
+        feed("]]");
+        CHECK(cur_line() == 1, "]] -> next heading (line %d)", cur_line() + 1);
+        feed("]]");
+        CHECK(cur_line() == 6, "]] skips # lines inside code (line %d)", cur_line() + 1);
+        feed("[[");
+        CHECK(cur_line() == 1, "[[ -> previous heading (line %d)", cur_line() + 1);
+        feed("G[[");
+        CHECK(cur_line() == 6, "[[ from the end");
+
+        /* the switch */
+        page_at("# Title", 0, 0);
+        feed(":set nomd\r");
+        CHECK(!M.enabled && plain(0, 0) && plain(0, 3), ":set nomd removes the styling");
+        feed("A!\x1b");
+        CHECK(plain(0, 3), "...and it stays off while editing");
+        feed(":set md\r");
+        CHECK(M.enabled && has_tag(0, 3, T_HEADING), ":set md brings it back");
         step_no = 99;
         break;
     }

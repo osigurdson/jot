@@ -12,6 +12,9 @@ GNOME already ships.
   Images live in `~/notes/assets/` and appear in the file as `![](assets/x.png)` lines,
   so you can grep, vim, or git it. External edits are picked up on window focus.
 - Opens with the cursor at the end, ready for the next note.
+- Light Markdown styling: headings, **bold**, *italic*, `code`, fenced blocks, lists,
+  `- [ ]`/`- [x]` tasks, > quotes, links. Same font and size, nothing hidden (markers are just
+  dimmed), and conservative so pasted code stays plain. `:set nomd` turns it off.
 - Line numbers in a gutter (logical lines, so they match `jot.md` in vim/grep); `:set nonu` hides them.
 - OCR (if `tesseract` is installed): text in screenshots is read in the background and
   cached next to each image as `assets/x.png.txt` (word positions in `.tsv`). `/` search finds
@@ -39,10 +42,12 @@ jot is modal, like vim. It opens in normal mode with the cursor at the end of th
   doubled for lines (`dd`, `3yy`, `cc`, `>>`), plus `x X D C Y J r ~ p P`.
 - **Text objects:** `iw aw iW aW`, `i" a" i' a' i\` a\``, `i( a( ib`, `i[ a[`, `i{ a{ iB`, `i< a<`, `ip ap`.
 - **Undo/redo:** `u`, `Ctrl+R` (an insert session is one undo step).
+- **Headings & links:** `]]` / `[[` jump to the next / previous `#` heading; `gx` (or Ctrl+click)
+  opens the link under the cursor.
 - **Search:** `/` `?` (incremental, smartcase) then `n N`; `* #` for the word under the cursor.
   Search also finds text inside screenshots (see OCR).
 - **Command line:** `:w` `:q` `:wq` `:x`, `:{n}` `:$`, `:[range]s/pat/rep/[gi]` (vim-style
-  `\( \) \| \+ \< \>`, `&`, `\1`), `:[range]d|y|>|<|j`, `:set nu|nonu`, `:e!`, `:noh`, `:u` `:redo`.
+  `\( \) \| \+ \< \>`, `&`, `\1`), `:[range]d|y|>|<|j`, `:set nu|nonu|md|nomd`, `:e!`, `:noh`, `:u` `:redo`.
   Up/Down for history. Ranges: `%`, `.`, `$`, `n`, `'<,'>`, `+n/-n`.
 - **Clipboard:** yank/delete/put use the system clipboard (like `clipboard=unnamedplus`), so `p`
   puts a screenshot you just took — on its own line below. `Ctrl+V` in insert mode pastes too.
