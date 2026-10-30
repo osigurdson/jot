@@ -1,16 +1,23 @@
 # jot
 
-A tiny native (C, GTK4 / libadwaita) scratch page for programmers: one page of
-notes, no files to manage. No server, no network, no dependencies beyond what
+A tiny native (C, GTK4 / libadwaita) scratch page for programmers: one running page
+of notes and screenshots per folder, vim keys, no files to manage. No server, no network, no dependencies beyond what
 GNOME already ships.
 
-- Everything is monospace (your system monospace font). No bold/italic/fonts.
+- Everything is monospace (your system monospace font), one size. No fonts to fight.
 - Paste is always plain text.
 - Paste screenshots straight in (or drag image files in). HiDPI screenshots are
   shown at their true size and shrink to fit the window.
-- Autosaves to one plain file, `~/notes/jot.md` (override the folder with `$JOT_DIR`).
-  Images live in `~/notes/assets/` and appear in the file as `![](assets/x.png)` lines,
-  so you can grep, vim, or git it. External edits are picked up on window focus.
+- Each page is a folder; `jot.md` in it autosaves as plain text, with images in `assets/`, so
+  you can grep, vim, or git it. External edits are picked up on window focus.
+
+      jot              # ~/Documents/jot/default (or $JOT_DIR)
+      jot work         # ~/Documents/jot/work
+      jot ./scratch    # any folder, e.g. a scratch page inside a repo
+
+  One window per page; running `jot work` again raises its window.
+- New pages get an `AGENTS.md` (and `CLAUDE.md` symlinked to it) explaining the layout to coding
+  agents, so `cd ~/Documents/jot/default && claude` works well out of the box.
 - Opens with the cursor at the end, ready for the next note.
 - Light Markdown styling: headings, **bold**, *italic*, `code`, fenced blocks, lists,
   `- [ ]`/`- [x]` tasks, > quotes, links. Same font and size, nothing hidden (markers are just
@@ -47,7 +54,7 @@ jot is modal, like vim. It opens in normal mode with the cursor at the end of th
 - **Search:** `/` `?` (incremental, smartcase) then `n N`; `* #` for the word under the cursor.
   Search also finds text inside screenshots (see OCR).
 - **Command line:** `:w` `:q` `:wq` `:x`, `:{n}` `:$`, `:[range]s/pat/rep/[gi]` (vim-style
-  `\( \) \| \+ \< \>`, `&`, `\1`), `:[range]d|y|>|<|j`, `:set nu|nonu|md|nomd`, `:e!`, `:noh`, `:u` `:redo`.
+  `\( \) \| \+ \< \>`, `&`, `\1`), `:[range]d|y|>|<|j`, `:set nu|nonu|md|nomd`, `:Ex` (opens the page's folder), `:e!`, `:noh`, `:u` `:redo`.
   Up/Down for history. Ranges: `%`, `.`, `$`, `n`, `'<,'>`, `+n/-n`.
 - **Clipboard:** yank/delete/put use the system clipboard (like `clipboard=unnamedplus`), so `p`
   puts a screenshot you just took — on its own line below. `Ctrl+V` in insert mode pastes too.

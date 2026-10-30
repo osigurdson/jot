@@ -1,16 +1,21 @@
 /* jot - a tiny native (GTK4 / libadwaita) scratch page for programmers.
  *
- * One page of notes, stored as plain text in ~/notes/jot.md (or $JOT_DIR/jot.md).
+ * One page of notes per folder, stored as plain text in <folder>/jot.md; `jot` opens
+ * ~/Documents/jot/default, `jot work` ~/Documents/jot/work, `jot ./x` any folder.
  * Pasted images are saved to <notes>/assets/ and stored as ![](assets/<file>) lines; if
  * tesseract is installed their text is read in the background so search can find it.
  * Editing is vim-style (modal); see vim.c.
  * Everything is monospace, paste is always plain text, nothing touches the network.
  */
 #include <adwaita.h>
+#ifdef GDK_WINDOWING_WAYLAND
+#include <gdk/wayland/gdkwayland.h>
+#endif
 #include <glib/gstdio.h>
 #include <math.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #define APP_ID "dev.jot.Jot"
 #define OBJ_UTF8 "\xef\xbf\xbc" /* U+FFFC: what GtkTextBuffer reports for an embedded image */
@@ -1451,12 +1456,6 @@ ACTION(zoom_in) { UNUSED; zoom(1); }
 ACTION(zoom_out) { UNUSED; zoom(-1); }
 ACTION(zoom_reset) { UNUSED; zoom(0); }
 ACTION(close) { UNUSED; gtk_window_close(J.win); }
-ACTION(open_folder) {
-    UNUSED;
-    g_autoptr(GFile) f = g_file_new_for_path(notes_dir);
-    g_autoptr(GtkFileLauncher) l = gtk_file_launcher_new(f);
-    gtk_file_launcher_launch(l, J.win, NULL, NULL, NULL);
-}
 ACTION(quit) {
     UNUSED;
     if (J.win)
@@ -1472,7 +1471,6 @@ static const GActionEntry win_actions[] = {
     {"zoom-out", act_zoom_out, NULL, NULL, NULL, {0}},
     {"zoom-reset", act_zoom_reset, NULL, NULL, NULL, {0}},
     {"close", act_close, NULL, NULL, NULL, {0}},
-    {"open-folder", act_open_folder, NULL, NULL, NULL, {0}},
 };
 
 static const struct {
@@ -1587,24 +1585,27 @@ static GtkWidget *build_editor(void) {
     return scroller;
 }
 
+/* Title: the page's folder name; subtitle: where it is. */
 static GtkWidget *build_header(void) {
     const char *home = g_get_home_dir();
-    g_autofree char *pretty = g_str_has_prefix(page_path, home) ? g_strconcat("~", page_path + strlen(home), NULL)
-                                                                 : g_strdup(page_path);
+    g_autofree char *pretty = g_str_has_prefix(notes_dir, home) ? g_strconcat("~", notes_dir + strlen(home), NULL)
+                                                                 : g_strdup(notes_dir);
+    g_autofree char *name = g_path_get_basename(notes_dir);
     GtkWidget *header = adw_header_bar_new();
-    adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), adw_window_title_new("jot", pretty));
-
-    g_autoptr(GMenu) menu = g_menu_new();
-    g_menu_append(menu, "Open notes folder", "win.open-folder");
-    g_menu_append(menu, "Zoom in", "win.zoom-in");
-    g_menu_append(menu, "Zoom out", "win.zoom-out");
-    g_menu_append(menu, "Reset zoom", "win.zoom-reset");
-    GtkWidget *menu_btn = gtk_menu_button_new();
-    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(menu_btn), "open-menu-symbolic");
-    gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_btn), G_MENU_MODEL(menu));
-    adw_header_bar_pack_end(ADW_HEADER_BAR(header), menu_btn);
-
+    adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), adw_window_title_new(name, pretty));
     return header;
+}
+
+/* Every page's window shows up as jot in the dock/overview, whatever its application ID. */
+static void on_realize(GtkWidget *win, gpointer unused) {
+    (void)unused;
+#ifdef GDK_WINDOWING_WAYLAND
+    GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(win));
+    if (GDK_IS_WAYLAND_TOPLEVEL(surface))
+        gdk_wayland_toplevel_set_application_id(GDK_WAYLAND_TOPLEVEL(surface), APP_ID);
+#else
+    (void)win;
+#endif
 }
 
 static void on_activate(GtkApplication *app, gpointer unused) {
@@ -1619,7 +1620,10 @@ static void on_activate(GtkApplication *app, gpointer unused) {
     J.font_size = state_int("font_size", DEFAULT_FONT_PT);
 
     J.win = GTK_WINDOW(adw_application_window_new(app));
-    gtk_window_set_title(J.win, "jot");
+    g_autofree char *name = g_path_get_basename(notes_dir);
+    g_autofree char *title = g_strdup_printf("%s - jot", name);
+    gtk_window_set_title(J.win, title);
+    g_signal_connect(J.win, "realize", G_CALLBACK(on_realize), NULL);
     gtk_window_set_default_size(J.win, state_int("width", 900), state_int("height", 750));
     if (state_bool("maximized", FALSE))
         gtk_window_maximize(J.win);
@@ -1651,17 +1655,107 @@ static void on_activate(GtkApplication *app, gpointer unused) {
     gtk_widget_grab_focus(GTK_WIDGET(J.view));
 }
 
-static void init_paths(void) {
-    const char *env = g_getenv("JOT_DIR");
-    if (env && *env)
-        notes_dir = g_str_has_prefix(env, "~/") ? g_build_filename(g_get_home_dir(), env + 2, NULL)
-                                                : g_canonicalize_filename(env, NULL);
-    else
-        notes_dir = g_build_filename(g_get_home_dir(), "notes", NULL);
+/* ------------------------------------------------------------------------- */
+/* Which folder (page) to open                                                */
+/* ------------------------------------------------------------------------- */
+
+/* Each page is a folder: jot.md, assets/, and AGENTS.md for coding agents. By default they live
+ * in Documents/jot/<name> (~/jot/<name> without a Documents folder). */
+static char *jot_root(void) {
+    const char *docs = g_get_user_special_dir(G_USER_DIRECTORY_DOCUMENTS);
+    if (docs && *docs && g_strcmp0(docs, g_get_home_dir()) != 0)
+        return g_build_filename(docs, "jot", NULL);
+    return g_build_filename(g_get_home_dir(), "jot", NULL);
+}
+
+static char *expand_path(const char *p) {
+    if (g_str_equal(p, "~"))
+        return g_strdup(g_get_home_dir());
+    if (g_str_has_prefix(p, "~/"))
+        return g_build_filename(g_get_home_dir(), p + 2, NULL);
+    return g_canonicalize_filename(p, NULL); /* relative to the current directory */
+}
+
+/* `jot` -> default page ($JOT_DIR or <root>/default); `jot work` (a bare name) -> <root>/work;
+ * `jot ./scratch`, `jot ~/x` (anything path-like) -> that folder. */
+static char *resolve_dir(const char *arg) {
+    if (!arg || !*arg) {
+        const char *env = g_getenv("JOT_DIR");
+        if (env && *env)
+            return expand_path(env);
+        g_autofree char *root = jot_root();
+        return g_build_filename(root, "default", NULL);
+    }
+    if (strchr(arg, '/') || g_str_equal(arg, ".") || g_str_equal(arg, "..") || arg[0] == '~')
+        return expand_path(arg);
+    g_autofree char *root = jot_root();
+    return g_build_filename(root, arg, NULL);
+}
+
+/* One window per folder: the default page is "dev.jot.Jot"; other folders get their own
+ * (stable) application ID, so `jot work` twice raises the open window instead of opening a
+ * second editor on the same file. */
+static char *app_id_for(const char *dir) {
+    g_autofree char *def = resolve_dir(NULL);
+    if (g_str_equal(dir, def))
+        return g_strdup(APP_ID);
+    g_autofree char *hash = g_compute_checksum_for_string(G_CHECKSUM_SHA256, dir, -1);
+    return g_strdup_printf("%s.page_%.16s", APP_ID, hash);
+}
+
+static const char agents_md[] =
+    "# jot page\n"
+    "\n"
+    "This folder is one page of **jot**, a small vim-style scratchpad: quick, disorganized notes and\n"
+    "screenshots taken while working. It isn't meant to be tidy and isn't where finished notes live.\n"
+    "The useful things to do with it are help the user understand what they were doing (reconstruct\n"
+    "the thread, explain an error in a screenshot, connect related bits) and distill it into something\n"
+    "else when asked (a summary, a doc, an issue, a commit message), written outside `jot.md` or just\n"
+    "given in chat. Don't clean up, restructure or \"improve\" `jot.md` itself.\n"
+    "\n"
+    "## Layout\n"
+    "\n"
+    "- `jot.md`: the notes, as one running page of plain text (light Markdown at most); newest\n"
+    "  notes are usually at the bottom.\n"
+    "- `![](assets/<name>.png)` lines in `jot.md` are pasted screenshots, each on its own line.\n"
+    "- `assets/<name>.png.txt`: OCR text of that screenshot (Tesseract). Read this first; it's much\n"
+    "  cheaper than opening the image. Open the PNG only when the text isn't enough (layout,\n"
+    "  diagrams, UI state, or garbled OCR). OCR is imperfect: quotes/backticks and small text are\n"
+    "  often wrong.\n"
+    "- `assets/<name>.png.tsv`: word positions jot uses for highlighting. Ignore it.\n"
+    "- Screenshot filenames start with the time they were pasted (`YYYYMMDD-HHMMSS`), a good clue\n"
+    "  to when a note was written. `## YYYY-MM-DD` headings, if present, mark days.\n"
+    "\n"
+    "## Editing\n"
+    "\n"
+    "Default to reading and answering; put anything you produce in chat or a new file. Only edit\n"
+    "`jot.md` when explicitly asked, and then:\n"
+    "- Append rather than reorganize, and keep the existing plain style.\n"
+    "- Images must stay as `![](assets/<file>)` lines on their own line, or jot won't show them.\n"
+    "- jot may be open with unsaved typing and could overwrite your edit. Tell the user to switch to\n"
+    "  the jot window afterwards (it reloads the file on focus if it has no unsaved changes).\n";
+
+/* A new page gets AGENTS.md (read by Codex and other agents) and CLAUDE.md, a symlink to it (read
+ * by Claude Code): one text, both tools. Existing files are never touched. */
+static void write_agent_files(void) {
+    g_autofree char *agents = g_build_filename(notes_dir, "AGENTS.md", NULL);
+    g_autofree char *claude = g_build_filename(notes_dir, "CLAUDE.md", NULL);
+    if (!g_file_test(agents, G_FILE_TEST_EXISTS))
+        g_file_set_contents(agents, agents_md, -1, NULL);
+    if (!g_file_test(claude, G_FILE_TEST_EXISTS) && !g_file_test(claude, G_FILE_TEST_IS_SYMLINK) &&
+        symlink("AGENTS.md", claude) != 0)
+        g_file_set_contents(claude, agents_md, -1, NULL); /* no symlinks here: a copy */
+}
+
+static void init_paths(const char *arg) {
+    notes_dir = resolve_dir(arg);
     assets_dir = g_build_filename(notes_dir, "assets", NULL);
     page_path = g_build_filename(notes_dir, "jot.md", NULL);
     state_path = g_build_filename(g_get_user_config_dir(), "jot", "state.ini", NULL);
+    gboolean fresh = !g_file_test(page_path, G_FILE_TEST_EXISTS);
     g_mkdir_with_parents(assets_dir, 0755);
+    if (fresh)
+        write_agent_files();
     img_re = g_regex_new("^!\\[[^\\]]*\\]\\((assets/[^)\\s/]+)\\)$", 0, 0, NULL);
     textures = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
     ocr_text = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
@@ -1673,9 +1767,20 @@ static void init_paths(void) {
 
 #ifndef JOT_NO_MAIN
 int main(int argc, char **argv) {
-    init_paths();
-    g_autoptr(AdwApplication) app = adw_application_new(APP_ID, G_APPLICATION_DEFAULT_FLAGS);
+    if (argc > 2 || (argc == 2 && argv[1][0] == '-')) {
+        g_autofree char *root = jot_root();
+        g_print("usage: jot [NAME | PATH]\n\n"
+                "  jot            the default page (%s/default, or $JOT_DIR)\n"
+                "  jot work       the page %s/work\n"
+                "  jot ./scratch  a page in any folder (anything with a /)\n",
+                root, root);
+        return argc == 2 && (g_str_equal(argv[1], "-h") || g_str_equal(argv[1], "--help")) ? 0 : 2;
+    }
+    init_paths(argc == 2 ? argv[1] : NULL);
+    g_autofree char *app_id = app_id_for(notes_dir);
+    g_autoptr(AdwApplication) app = adw_application_new(app_id, G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(on_activate), NULL);
-    return g_application_run(G_APPLICATION(app), argc, argv);
+    char *args[] = {argv[0], NULL}; /* the folder is ours, not GApplication's */
+    return g_application_run(G_APPLICATION(app), 1, args);
 }
 #endif

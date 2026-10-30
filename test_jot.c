@@ -920,6 +920,46 @@ static gboolean step(gpointer unused) {
         CHECK(plain(0, 3), "...and it stays off while editing");
         feed(":set md\r");
         CHECK(M.enabled && has_tag(0, 3, T_HEADING), ":set md brings it back");
+        break;
+    }
+    case 25: {
+        /* ---- page folders ---- */
+        const char *env = g_getenv("JOT_DIR");
+        g_autofree char *home = g_strdup(g_get_home_dir());
+        g_autofree char *root = jot_root();
+        g_autofree char *d0 = resolve_dir(NULL);
+        g_autofree char *d1 = resolve_dir("work");
+        g_autofree char *d2 = resolve_dir("~/x/y");
+        g_autofree char *d3 = resolve_dir("./scratch");
+        g_autofree char *cwd = g_get_current_dir();
+        g_autofree char *want1 = g_build_filename(root, "work", NULL);
+        g_autofree char *want2 = g_build_filename(home, "x", "y", NULL);
+        g_autofree char *want3 = g_build_filename(cwd, "scratch", NULL);
+        CHECK(g_str_equal(d0, env), "jot with no argument uses $JOT_DIR when set");
+        CHECK(g_str_equal(d1, want1), "jot work -> %s", d1);
+        CHECK(g_str_equal(d2, want2), "jot ~/x/y -> %s", d2);
+        CHECK(g_str_equal(d3, want3), "jot ./scratch -> %s", d3);
+        CHECK(g_str_has_suffix(root, "/jot"), "pages live under .../jot: %s", root);
+        g_autofree char *id0 = app_id_for(d0);
+        g_autofree char *id1 = app_id_for(d1);
+        g_autofree char *id1b = app_id_for(want1);
+        CHECK(g_str_equal(id0, APP_ID), "default page uses the plain app ID");
+        CHECK(!g_str_equal(id1, id0) && g_str_equal(id1, id1b) && g_application_id_is_valid(id1),
+              "other pages get their own stable, valid app ID (%s)", id1);
+
+        g_autofree char *agents = g_build_filename(notes_dir, "AGENTS.md", NULL);
+        g_autofree char *claude = g_build_filename(notes_dir, "CLAUDE.md", NULL);
+        g_autofree char *link = g_file_read_link(claude, NULL);
+        g_autofree char *ctext = NULL;
+        g_file_get_contents(claude, &ctext, NULL, NULL);
+        CHECK(g_file_test(agents, G_FILE_TEST_IS_REGULAR), "a new page gets AGENTS.md");
+        CHECK(link && g_str_equal(link, "AGENTS.md") && ctext && g_str_equal(ctext, agents_md),
+              "...and CLAUDE.md, a symlink to it");
+        g_file_set_contents(agents, "my own notes for agents\n", -1, NULL);
+        write_agent_files();
+        g_autofree char *atext = NULL;
+        g_file_get_contents(agents, &atext, NULL, NULL);
+        CHECK(g_str_equal(atext, "my own notes for agents\n"), "existing agent files are never overwritten");
         step_no = 99;
         break;
     }
@@ -937,7 +977,7 @@ static void on_test_activate(GtkApplication *app, gpointer d) {
 }
 
 int main(void) {
-    init_paths();
+    init_paths(NULL);
     g_autoptr(AdwApplication) app = adw_application_new("dev.jot.JotTest", G_APPLICATION_NON_UNIQUE);
     g_signal_connect(app, "activate", G_CALLBACK(on_test_activate), NULL);
     g_application_run(G_APPLICATION(app), 0, NULL);

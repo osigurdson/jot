@@ -1672,6 +1672,11 @@ static void ex_command(const char *raw) {
     } else if (is_q) {
         save();
         gtk_window_close(J.win);
+    } else if (g_str_equal(p, "Ex") || g_str_equal(p, "Explore") || g_str_equal(p, "E")) {
+        /* vim's file browser; here, the notes folder in the system file manager */
+        g_autoptr(GFile) f = g_file_new_for_path(notes_dir);
+        g_autoptr(GtkFileLauncher) l = gtk_file_launcher_new(f);
+        gtk_file_launcher_launch(l, J.win, NULL, NULL, NULL);
     } else if (g_str_equal(p, "noh") || g_str_equal(p, "nohlsearch")) {
         cursor_iter(&it);
         gtk_text_buffer_place_cursor(J.buf, &it);
