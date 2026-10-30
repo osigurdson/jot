@@ -5,11 +5,11 @@ CFLAGS  += -std=gnu11 -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LDLIBS  += $(shell pkg-config --libs $(PKGS)) -lm
 PREFIX  ?= $(HOME)/.local
 
-jot: jot.c
+jot: jot.c vim.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
 
 # Headless UI tests (GTK Broadway backend, nothing appears on screen).
-test_jot: test_jot.c jot.c
+test_jot: test_jot.c jot.c vim.c
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $< $(LDLIBS)
 
 check: test_jot

@@ -12,9 +12,9 @@ GNOME already ships.
   Images live in `~/notes/assets/` and appear in the file as `![](assets/x.png)` lines,
   so you can grep, vim, or git it. External edits are picked up on window focus.
 - Opens with the cursor at the end, ready for the next note.
-- Line numbers in a gutter (logical lines, so they match `jot.md` in vim/grep).
+- Line numbers in a gutter (logical lines, so they match `jot.md` in vim/grep); `:set nonu` hides them.
 - OCR (if `tesseract` is installed): text in screenshots is read in the background and
-  cached next to each image as `assets/x.png.txt`. Ctrl+F finds text inside images, and
+  cached next to each image as `assets/x.png.txt`. `/` search finds text inside images, and
   right-click an image → **Copy Text from Image** (or select it and press Ctrl+Shift+C).
   Without tesseract these features just don't appear.
 
@@ -26,15 +26,28 @@ GNOME already ships.
     make install    # ~/.local/bin/jot + app-grid launcher (PREFIX=... to change)
     make check      # headless UI tests (Broadway backend, ASan/UBSan)
 
-## Keys
+## Keys: it's vim
 
-| key                  | action                                    |
-|----------------------|-------------------------------------------|
-| Ctrl+F               | find, including text inside images (Enter next, Shift+Enter previous, Esc closes) |
-| Ctrl+Shift+C         | copy the text of the selected image (OCR) |
-| Tab / Shift+Tab      | indent / dedent (works on selected lines) |
-| Enter                | new line, keeps indentation               |
-| Ctrl +/-/0           | zoom                                      |
-| double-click image   | open in your image viewer                 |
-| Ctrl+C on an image   | copies the actual image to the clipboard  |
-| Ctrl+W / Ctrl+Q      | close / quit                              |
+jot is modal, like vim. It opens in normal mode with the cursor at the end of the page.
+
+- **Modes:** normal, insert (`i a I A o O`, `s S`, `c…`), visual `v` / visual line `V`.
+  The bottom line shows the mode, keys typed so far, and line,col.
+- **Motions:** `h j k l`, `w b e W B E`, `0 ^ $ g_`, `gg G {n}G`, `f F t T ; ,`, `{ }`, `%`, `H M L`,
+  `Ctrl+D/U/F/B`, `Ctrl+E/Y`, `zz zt zb`, arrows/Home/End/PgUp/PgDn. Counts work (`3w`, `5j`).
+- **Operators:** `d y c < >` with any motion or text object (`dw`, `d3j`, `ci"`, `da(`, `yip`),
+  doubled for lines (`dd`, `3yy`, `cc`, `>>`), plus `x X D C Y J r ~ p P`.
+- **Text objects:** `iw aw iW aW`, `i" a" i' a' i\` a\``, `i( a( ib`, `i[ a[`, `i{ a{ iB`, `i< a<`, `ip ap`.
+- **Undo/redo:** `u`, `Ctrl+R` (an insert session is one undo step).
+- **Search:** `/` `?` (incremental, smartcase) then `n N`; `* #` for the word under the cursor.
+  Search also finds text inside screenshots (see OCR).
+- **Command line:** `:w` `:q` `:wq` `:x`, `:{n}` `:$`, `:[range]s/pat/rep/[gi]` (vim-style
+  `\( \) \| \+ \< \>`, `&`, `\1`), `:[range]d|y|>|<|j`, `:set nu|nonu`, `:e!`, `:noh`, `:u` `:redo`.
+  Up/Down for history. Ranges: `%`, `.`, `$`, `n`, `'<,'>`, `+n/-n`.
+- **Clipboard:** yank/delete/put use the system clipboard (like `clipboard=unnamedplus`), so `p`
+  puts a screenshot you just took — on its own line below. `Ctrl+V` in insert mode pastes too.
+- **Images:** `gx` (or double-click) opens the image under the cursor; right-click an image →
+  Copy Text from Image (or `Ctrl+Shift+C` when it's selected).
+- Insert mode: `Esc`/`Ctrl+[` to leave, `Ctrl+W` deletes a word, `Ctrl+U` to the line start,
+  `Tab` indents, Enter keeps indentation.
+- Not (yet): `.` repeat, macros, marks, named registers, block visual (`Ctrl+V`).
+- Window: `Ctrl+S` save (it autosaves anyway), `Ctrl+Q` quit, `Ctrl +/-/0` zoom.

@@ -105,6 +105,74 @@ static void screenshot(const char *name) {
     gdk_texture_save_to_png(tex, path);
 }
 
+/* Types keys as the key handler would: control chars for Esc (\x1b) and Enter (\r);
+ * in insert mode text is typed into the buffer; with : or / open, into the command line. */
+static void feed(const char *keys) {
+    for (const char *p = keys; *p; p = g_utf8_next_char(p)) {
+        gunichar c = g_utf8_get_char(p);
+        char b[8] = {0};
+        g_unichar_to_utf8(c, b);
+        if (cmdline_is_open()) {
+            if (c == '\r') {
+                g_signal_emit_by_name(V.cmd, "activate");
+            } else if (c == K_ESC) {
+                cmdline_cancel();
+            } else {
+                g_autofree char *t = g_strconcat(gtk_editable_get_text(GTK_EDITABLE(V.cmd)), b, NULL);
+                gtk_editable_set_text(GTK_EDITABLE(V.cmd), t);
+            }
+        } else if (V.mode == MODE_INSERT && c != K_ESC) {
+            if (c == '\r')
+                on_key(NULL, GDK_KEY_Return, 0, 0, NULL);
+            else if (c == '\t')
+                on_key(NULL, GDK_KEY_Tab, 0, 0, NULL);
+            else
+                gtk_text_buffer_insert_interactive_at_cursor(J.buf, b, -1, TRUE);
+        } else {
+            vim_input(c);
+        }
+    }
+}
+
+/* Sets the page and puts the (normal mode) cursor at line, col. */
+static void page_at(const char *text, int line, int col) {
+    if (V.mode == MODE_INSERT)
+        leave_insert();
+    if (is_visual())
+        exit_visual(-1);
+    set_text(text);
+    GtkTextIter it;
+    iter_line_col(&it, line, col);
+    set_cursor(&it);
+    g_string_truncate(V.pending, 0);
+}
+
+static int cur_line(void) {
+    GtkTextIter it;
+    get_cursor(&it);
+    return gtk_text_iter_get_line(&it);
+}
+
+static int cur_col(void) {
+    GtkTextIter it;
+    get_cursor(&it);
+    return gtk_text_iter_get_line_offset(&it);
+}
+
+static char *page_text(void) {
+    return serialize(J.buf);
+}
+
+#define CHECK_PAGE(expect, ...)                                                                      \
+    do {                                                                                             \
+        g_autofree char *_t = page_text();                                                           \
+        CHECK(g_str_equal(_t, expect), __VA_ARGS__);                                                 \
+        if (!g_str_equal(_t, expect))                                                                \
+            g_print("      got: \"%s\"\n", g_strescape(_t, NULL));                                   \
+    } while (0)
+
+#define CHECK_POS(l, c, what) CHECK(cur_line() == (l) && cur_col() == (c), "%s -> %d,%d (got %d,%d)", what, l, c, cur_line(), cur_col())
+
 static char *selected_text(void) {
     GtkTextIter s, e;
     if (!gtk_text_buffer_get_selection_bounds(J.buf, &s, &e))
@@ -254,29 +322,35 @@ static gboolean step(gpointer unused) {
         break;
     }
     case 11: {
-        /* find: case-insensitive, next wraps, previous goes back */
-        set_text("alpha FLAKY\nbeta\nflaky gamma\nflaky delta");
-        GtkTextIter it;
-        gtk_text_buffer_get_start_iter(J.buf, &it);
-        gtk_text_buffer_place_cursor(J.buf, &it);
-        open_find();
-        CHECK(gtk_search_bar_get_search_mode(J.find_bar), "Ctrl+F opens find bar");
-        gtk_editable_set_text(GTK_EDITABLE(J.find_entry), "flaky");
-        find(TRUE, FALSE);
+        /* / search: smartcase, n wraps, N goes back, ? searches backward */
+        page_at("alpha FLAKY\nbeta\nflaky gamma\nflaky delta", 0, 0);
+        feed("/flaky\r");
         t = selected_text();
-        CHECK(g_str_equal(t, "FLAKY") && selection_line() == 0, "find selects first match (case-insensitive)");
-        find(TRUE, TRUE);
-        CHECK(selection_line() == 2, "next -> line 2 (got %d)", selection_line());
-        find(TRUE, TRUE);
-        find(TRUE, TRUE);
-        CHECK(selection_line() == 0, "next wraps to line 0 (got %d)", selection_line());
-        find(FALSE, TRUE);
-        CHECK(selection_line() == 3, "previous wraps back to line 3 (got %d)", selection_line());
-        gtk_editable_set_text(GTK_EDITABLE(J.find_entry), "zzz");
-        find(TRUE, FALSE);
-        CHECK(gtk_widget_has_css_class(GTK_WIDGET(J.find_entry), "error"), "no match marks entry red");
-        gtk_search_bar_set_search_mode(J.find_bar, FALSE);
-        CHECK(gtk_widget_has_focus(GTK_WIDGET(J.view)), "closing find returns focus to editor");
+        CHECK(g_str_equal(t, "FLAKY") && selection_line() == 0, "/flaky finds FLAKY (lowercase = ignore case)");
+        CHECK(!gtk_widget_has_focus(GTK_WIDGET(V.cmd)) && gtk_widget_has_focus(GTK_WIDGET(J.view)),
+              "Enter closes the prompt, focus back in editor");
+        feed("n");
+        CHECK(cur_line() == 2, "n -> line 2 (got %d)", cur_line());
+        feed("n");
+        feed("n");
+        CHECK(cur_line() == 0, "n wraps to line 0 (got %d)", cur_line());
+        CHECK(g_str_has_prefix(gtk_label_get_text(V.mode_label), "search hit BOTTOM"), "wrap message shown");
+        feed("N");
+        CHECK(cur_line() == 3, "N wraps back to line 3 (got %d)", cur_line());
+        feed("/FLAKY\r");
+        CHECK(cur_line() == 0, "/FLAKY is case-sensitive (smartcase) -> line 0 (got %d)", cur_line());
+        page_at("alpha FLAKY\nbeta\nflaky gamma\nflaky delta", 3, 3);
+        feed("?gamma\r");
+        CHECK_POS(2, 6, "?gamma searches backward");
+        feed("/zzz\r");
+        CHECK(gtk_widget_has_css_class(GTK_WIDGET(V.mode_label), "error") &&
+                  strstr(gtk_label_get_text(V.mode_label), "E486"),
+              "no match -> E486 error");
+        CHECK_POS(2, 6, "failed search leaves cursor");
+        feed("/bet");
+        CHECK(selection_line() == 1, "incremental search highlights while typing");
+        feed("\x1b");
+        CHECK_POS(2, 6, "Esc in the prompt cancels and restores the cursor");
         break;
     }
     case 12: {
@@ -293,13 +367,10 @@ static gboolean step(gpointer unused) {
     }
     case 13: {
         /* auto-indent on Enter, Tab inserts spaces */
-        set_text("");
-        gtk_text_buffer_insert_at_cursor(J.buf, "    indented", -1);
-        on_key(NULL, GDK_KEY_Return, 0, 0, NULL);
-        on_key(NULL, GDK_KEY_Tab, 0, 0, NULL);
-        gtk_text_buffer_insert_at_cursor(J.buf, "x", -1);
+        page_at("", 0, 0);
+        feed("i    indented\r\tx\x1b");
         t = serialize(J.buf);
-        CHECK(g_str_equal(t, "    indented\n        x"), "enter keeps indent, tab inserts 4 spaces");
+        CHECK(g_str_equal(t, "    indented\n        x"), "insert mode: enter keeps indent, tab inserts 4 spaces");
         /* an emptied page is saved as an empty file */
         set_text("x");
         select_all();
@@ -341,7 +412,7 @@ static gboolean step(gpointer unused) {
               "missing/unsafe image refs stay as plain text");
         if (!tesseract_path) {
             g_print("skip  OCR tests: tesseract not installed\n");
-            step_no = 99;
+            step_no = 19;
             break;
         }
         /* ---- OCR ---- */
@@ -368,33 +439,25 @@ static gboolean step(gpointer unused) {
               "pasted dark screenshot is OCR'd into %s.txt: %s", ocr_rel, ocr ? ocr : "(none)");
         /* page: text, the image, more text */
         g_autofree char *page = g_strdup_printf("intro\n![](%s)\nlater: parse_config is called here", ocr_rel);
-        set_text(page);
-        GtkTextIter it;
-        gtk_text_buffer_get_start_iter(J.buf, &it);
-        gtk_text_buffer_place_cursor(J.buf, &it);
-        open_find();
-        gtk_editable_set_text(GTK_EDITABLE(J.find_entry), "segmentation");
-        find(TRUE, FALSE);
+        page_at(page, 0, 0);
+        feed("/segmentation\r");
         JotImage *sel = selected_image();
-        CHECK(sel && sel->selected, "find matches text inside an image and outlines it");
-        CHECK(g_str_has_prefix(gtk_label_get_text(J.find_note), "in image: Segmentation"),
-              "find bar shows the matching image line: %s", gtk_label_get_text(J.find_note));
-        gtk_text_buffer_get_start_iter(J.buf, &it);
-        gtk_text_buffer_place_cursor(J.buf, &it);
-        gtk_editable_set_text(GTK_EDITABLE(J.find_entry), "parse_config");
-        find(TRUE, FALSE);
+        CHECK(sel && sel->selected, "/ finds text inside an image and outlines it");
+        CHECK(g_str_has_prefix(gtk_label_get_text(V.mode_label), "in image: Segmentation"),
+              "status line shows the matching image line: %s", gtk_label_get_text(V.mode_label));
+        page_at(page, 0, 0);
+        feed("/parse_config\r");
         CHECK(selected_image() != NULL, "image match comes before a later text match");
-        find(TRUE, TRUE);
+        feed("n");
         t = selected_text();
         CHECK(selected_image() == NULL && g_str_equal(t, "parse_config") && selection_line() == 2,
-              "next goes on to the text match");
-        CHECK(*gtk_label_get_text(J.find_note) == '\0', "note clears for text matches");
-        find(TRUE, TRUE);
-        CHECK(selected_image() != NULL, "next wraps back around to the image");
-        find(FALSE, TRUE);
-        CHECK(selected_image() == NULL && selection_line() == 2, "previous wraps to the text match");
-        gtk_search_bar_set_search_mode(J.find_bar, FALSE);
-        CHECK(first_image() && !first_image()->selected, "outline goes away when selection moves off image");
+              "n goes on to the text match");
+        feed("n");
+        CHECK(selected_image() != NULL, "n wraps back around to the image");
+        feed("N");
+        CHECK(selected_image() == NULL && selection_line() == 2, "N wraps back to the text match");
+        feed("k");
+        CHECK(first_image() && !first_image()->selected, "outline goes away when the cursor moves on");
 
         /* Copy Text from Image (context menu / Ctrl+Shift+C) on the selected image */
         GtkTextIter a, b;
@@ -454,6 +517,251 @@ static gboolean step(gpointer unused) {
         CHECK(!g_action_get_enabled(copy) && g_action_get_enabled(open),
               "no tesseract: copy-text hidden, open-image still available");
         tesseract_path = saved;
+        break;
+    }
+    case 19: {
+        /* ---- vim: motions ---- */
+        page_at("hello world foo\nsecond line here\n\nlast", 0, 0);
+        feed("w");
+        CHECK_POS(0, 6, "w");
+        feed("e");
+        CHECK_POS(0, 10, "e");
+        feed("b");
+        CHECK_POS(0, 6, "b");
+        feed("$");
+        CHECK_POS(0, 14, "$ (on last char)");
+        feed("0");
+        CHECK_POS(0, 0, "0");
+        feed("3l");
+        CHECK_POS(0, 3, "3l");
+        feed("j");
+        CHECK_POS(1, 3, "j keeps column");
+        feed("jj");
+        CHECK_POS(3, 3, "j through an empty line keeps the wanted column");
+        feed("gg");
+        CHECK_POS(0, 0, "gg");
+        feed("G");
+        CHECK_POS(3, 0, "G");
+        feed("2G");
+        CHECK_POS(1, 0, "2G");
+        feed("gg}");
+        CHECK_POS(2, 0, "} stops at the blank line");
+        feed("gg");
+        feed("fo");
+        CHECK_POS(0, 4, "fo");
+        feed(";");
+        CHECK_POS(0, 7, "; repeats f");
+        feed(",");
+        CHECK_POS(0, 4, ", reverses");
+        feed("tw");
+        CHECK_POS(0, 5, "tw stops before w");
+        feed("ll");
+        CHECK_POS(0, 7, "l");
+        feed("10l");
+        CHECK_POS(0, 14, "l stops at the last char");
+        feed("hh");
+        page_at("if (a[1] == b) { x(); }", 0, 3);
+        feed("%");
+        CHECK_POS(0, 13, "% jumps to the matching bracket");
+        feed("%");
+        CHECK_POS(0, 3, "% jumps back");
+
+        /* ---- operators ---- */
+        page_at("hello world foo", 0, 0);
+        feed("dw");
+        CHECK_PAGE("world foo", "dw");
+        feed("d2w");
+        CHECK_PAGE("", "d2w");
+        page_at("hello world foo", 0, 6);
+        feed("D");
+        CHECK_PAGE("hello ", "D");
+        CHECK_POS(0, 5, "D leaves cursor on the last char");
+        page_at("hello world", 0, 0);
+        feed("cwbye\x1b");
+        CHECK_PAGE("bye world", "cw (changes to end of word)");
+        CHECK(V.mode == MODE_NORMAL && cur_col() == 2, "Esc returns to normal mode, cursor steps back");
+        feed("u");
+        CHECK_PAGE("hello world", "u undoes the whole change (cw + typing) at once");
+        feed("\x12");
+        CHECK_PAGE("bye world", "Ctrl+R redoes it");
+        page_at("say \"hi there\" now", 0, 7);
+        feed("ci\"yo\x1b");
+        CHECK_PAGE("say \"yo\" now", "ci\" changes inside quotes");
+        page_at("f(a, (b), c)", 0, 2);
+        feed("di(");
+        CHECK_PAGE("f()", "di( deletes inside the enclosing parens");
+        page_at("f(a, (b), c)", 0, 6);
+        feed("da(");
+        CHECK_PAGE("f(a, , c)", "da( deletes the inner parens");
+        page_at("one two three", 0, 5);
+        feed("diw");
+        CHECK_PAGE("one  three", "diw");
+        page_at("one two three", 0, 5);
+        feed("daw");
+        CHECK_PAGE("one three", "daw takes the trailing space");
+        page_at("abcdef", 0, 1);
+        feed("3x");
+        CHECK_PAGE("aef", "3x");
+        feed("X");
+        CHECK_PAGE("ef", "X");
+        page_at("abc", 0, 1);
+        feed("rZ");
+        CHECK_PAGE("aZc", "r");
+        feed("~");
+        CHECK_PAGE("azc", "~ toggles case");
+        CHECK_POS(0, 2, "~ advances");
+        page_at("one\n   two\nthree", 0, 0);
+        feed("J");
+        CHECK_PAGE("one two\nthree", "J joins with one space");
+        CHECK_POS(0, 3, "J puts the cursor at the join");
+        page_at("a\nb", 0, 0);
+        feed(">>");
+        CHECK_PAGE("    a\nb", ">>");
+        feed("<<");
+        CHECK_PAGE("a\nb", "<<");
+        feed("2>>");
+        CHECK_PAGE("    a\n    b", "2>>");
+
+        /* ---- lines ---- */
+        page_at("one\ntwo\nthree", 1, 1);
+        feed("dd");
+        CHECK_PAGE("one\nthree", "dd");
+        CHECK_POS(1, 0, "dd leaves cursor on the next line");
+        feed("dd");
+        CHECK_PAGE("one", "dd on the last line takes the newline before it");
+        page_at("one\ntwo\nthree\nfour", 0, 0);
+        feed("2dd");
+        CHECK_PAGE("three\nfour", "2dd");
+        page_at("one\ntwo\nthree", 0, 0);
+        feed("dj");
+        CHECK_PAGE("three", "dj is linewise");
+        page_at("  one\ntwo", 0, 3);
+        feed("cc");
+        CHECK(V.mode == MODE_INSERT, "cc enters insert mode");
+        feed("x\x1b");
+        CHECK_PAGE("  x\ntwo", "cc keeps the indent");
+        page_at("  one", 0, 4);
+        feed("o");
+        feed("next\x1b");
+        CHECK_PAGE("  one\n  next", "o opens an indented line below");
+        feed("Otop\x1b");
+        CHECK_PAGE("  one\n  top\n  next", "O opens a line above");
+        page_at("mid", 0, 1);
+        feed("Ax\x1bIy\x1b");
+        CHECK_PAGE("ymidx", "A and I");
+        page_at("ab", 0, 0);
+        feed("ax\x1b");
+        CHECK_PAGE("axb", "a appends after the cursor char");
+
+        /* ---- visual ---- */
+        page_at("one two\nthree four", 0, 4);
+        feed("vjd");
+        CHECK_PAGE("one  four", "v j d deletes charwise across lines (inclusive)");
+        page_at("one\ntwo\nthree", 0, 1);
+        feed("Vjd");
+        CHECK_PAGE("three", "V j d deletes whole lines");
+        page_at("one two three", 0, 4);
+        feed("viwU");
+        CHECK_PAGE("one TWO three", "viw U uppercases the word");
+        CHECK(V.mode == MODE_NORMAL, "operator ends visual mode");
+        page_at("a\nb\nc", 0, 0);
+        feed("Vj>");
+        CHECK_PAGE("    a\n    b\nc", "V j > indents the lines");
+        page_at("one two", 0, 0);
+        feed("ve");
+        CHECK(V.mode == MODE_VISUAL, "v enters visual mode");
+        CHECK(g_str_equal(gtk_label_get_text(V.mode_label), "-- VISUAL --"), "status shows -- VISUAL --");
+        t = selected_text();
+        CHECK(g_str_equal(t, "one"), "v e selects inclusively: %s", t);
+        feed("\x1b");
+        CHECK(V.mode == MODE_NORMAL && !gtk_text_buffer_get_has_selection(J.buf), "Esc leaves visual mode");
+
+        /* ---- ex commands ---- */
+        page_at("foo one\nfoo two foo\nthree", 0, 0);
+        feed(":%s/foo/bar/g\r");
+        CHECK_PAGE("bar one\nbar two bar\nthree", ":%%s/foo/bar/g");
+        CHECK(strstr(gtk_label_get_text(V.mode_label), "3 substitutions on 2 lines") != NULL,
+              "substitute reports: %s", gtk_label_get_text(V.mode_label));
+        feed(":s/bar/baz/\r");
+        CHECK_PAGE("bar one\nbaz two bar\nthree", ":s on the current (last changed) line, first match only");
+        feed(":%s/\\(t\\w\\+\\)/<\\1>/\r");
+        CHECK_PAGE("bar one\nbaz <two> bar\n<three>", "vim-style groups and \\1 in :s");
+        feed(":1\r");
+        CHECK_POS(0, 0, ":1 goes to line 1");
+        feed(":$\r");
+        CHECK(cur_line() == 2, ":$ goes to the last line");
+        feed(":set nonu\r");
+        CHECK(!J.line_numbers && !gtk_widget_get_parent(J.gutter), ":set nonu hides line numbers");
+        feed(":set nu\r");
+        CHECK(J.line_numbers && gtk_widget_is_ancestor(J.gutter, GTK_WIDGET(J.view)), ":set nu shows them");
+        feed(":w\r");
+        CHECK(strstr(gtk_label_get_text(V.mode_label), "written") != NULL, ":w reports written: %s",
+              gtk_label_get_text(V.mode_label));
+        feed(":bogus\r");
+        CHECK(strstr(gtk_label_get_text(V.mode_label), "E492") != NULL, "unknown command -> E492");
+        feed(":2,3d\r");
+        CHECK_PAGE("bar one", ":2,3d deletes lines");
+
+        /* ---- keys ---- */
+        page_at("abc", 0, 0);
+        CHECK(vim_key(GDK_KEY_q, 0) && vim_key(GDK_KEY_z, 0), "normal mode swallows printable keys");
+        g_string_truncate(V.pending, 0);
+        CHECK_PAGE("abc", "...without inserting them");
+        vim_key(GDK_KEY_Right, 0);
+        CHECK_POS(0, 1, "arrow keys move");
+        vim_key(GDK_KEY_i, 0);
+        CHECK(V.mode == MODE_INSERT && g_str_equal(gtk_label_get_text(V.mode_label), "-- INSERT --"),
+              "i -> insert mode, status says so");
+        CHECK(!vim_key(GDK_KEY_q, 0), "insert mode lets keys through to the text view");
+        CHECK(!gtk_text_view_get_overwrite(J.view), "insert mode: line cursor");
+        vim_key(GDK_KEY_Escape, 0);
+        CHECK(V.mode == MODE_NORMAL && gtk_text_view_get_overwrite(J.view), "Esc -> normal mode, block cursor");
+        CHECK(!vim_key(GDK_KEY_c, GDK_CONTROL_MASK), "Ctrl+C is left to GTK (copy)");
+        CHECK(g_str_equal(gtk_label_get_text(V.pos_label), "1,1"), "status shows line,col: %s",
+              gtk_label_get_text(V.pos_label));
+        feed("2d");
+        CHECK(g_str_equal(gtk_label_get_text(V.showcmd_label), "2d"), "pending keys are shown");
+        feed("\x1b");
+
+        /* ---- put (reads the clipboard asynchronously; checked next step) ---- */
+        page_at("one\ntwo\nthree", 0, 0);
+        feed("yyjp");
+        break;
+    }
+    case 20: {
+        CHECK_PAGE("one\ntwo\none\nthree", "yy j p puts the line below");
+        CHECK_POS(2, 0, "p puts the cursor on the new line");
+        page_at("abc", 0, 0);
+        feed("ylp");
+        break;
+    }
+    case 21: {
+        CHECK_PAGE("aabc", "yl p puts after the cursor char");
+        page_at("one two", 0, 0);
+        feed("vey");
+        CHECK(V.mode == MODE_NORMAL, "v e y leaves visual mode");
+        feed("$p");
+        break;
+    }
+    case 22: {
+        CHECK_PAGE("one twoone", "visual yank + $p");
+        /* p of an image (screenshot on the clipboard) goes on its own line below */
+        page_at("above\nbelow", 0, 2);
+        g_autoptr(GdkTexture) tex = make_texture(40, 20);
+        g_autoptr(GBytes) png = gdk_texture_save_to_png_bytes(tex);
+        set_clipboard_bytes("image/png", png);
+        feed("p");
+        break;
+    }
+    case 23: {
+        if (!first_image() && waited++ < 20) {
+            step_no--;
+            break;
+        }
+        waited = 0;
+        g_autofree char *txt = page_text();
+        g_autoptr(GRegex) re = g_regex_new("^above\n!\\[\\]\\(assets/[^)]+\\)\nbelow$", 0, 0, NULL);
+        CHECK(g_regex_match(re, txt, 0, NULL), "p of a screenshot puts it on its own line below");
         step_no = 99;
         break;
     }

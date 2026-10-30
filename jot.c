@@ -2,7 +2,8 @@
  *
  * One page of notes, stored as plain text in ~/notes/jot.md (or $JOT_DIR/jot.md).
  * Pasted images are saved to <notes>/assets/ and stored as ![](assets/<file>) lines; if
- * tesseract is installed their text is read in the background so Find can search it.
+ * tesseract is installed their text is read in the background so search can find it.
+ * Editing is vim-style (modal); see vim.c.
  * Everything is monospace, paste is always plain text, nothing touches the network.
  */
 #include <adwaita.h>
@@ -281,12 +282,10 @@ static struct {
     GtkWindow *win;
     GtkTextView *view;
     GtkTextBuffer *buf;
-    GtkSearchBar *find_bar;
-    GtkSearchEntry *find_entry;
-    GtkLabel *find_note;
     AdwToastOverlay *toasts;
     GtkCssProvider *css;
     GtkWidget *gutter;
+    gboolean line_numbers;
     GKeyFile *state;
     char *last_saved;
     gint64 mtime;
@@ -443,6 +442,7 @@ static void save_state(void) {
     g_key_file_set_integer(k, "window", "height", h);
     g_key_file_set_boolean(k, "window", "maximized", gtk_window_is_maximized(J.win));
     g_key_file_set_integer(k, "window", "font_size", J.font_size);
+    g_key_file_set_boolean(k, "window", "line_numbers", J.line_numbers);
     g_autofree char *dir = g_path_get_dirname(state_path);
     g_mkdir_with_parents(dir, 0755);
     g_key_file_save_to_file(k, state_path, NULL);
@@ -811,23 +811,29 @@ static void on_paste(GtkTextView *view, gpointer unused) {
         gdk_clipboard_read_value_async(cb, GDK_TYPE_FILE_LIST, G_PRIORITY_DEFAULT, NULL, paste_files_done, NULL);
 }
 
+/* Puts text on the clipboard; a lone image also goes on as a real image, for other apps. */
+static void clipboard_set(const char *text, JotImage *lone_image) {
+    GdkContentProvider *providers[2];
+    guint n = 0;
+    if (lone_image) {
+        g_autoptr(GBytes) png = gdk_texture_save_to_png_bytes(lone_image->texture);
+        providers[n++] = gdk_content_provider_new_for_bytes("image/png", png);
+    }
+    g_autoptr(GBytes) bytes = g_bytes_new(text, strlen(text));
+    providers[n++] = gdk_content_provider_new_for_bytes("text/plain;charset=utf-8", bytes);
+    g_autoptr(GdkContentProvider) u = gdk_content_provider_new_union(providers, n);
+    gdk_clipboard_set_content(gtk_widget_get_clipboard(GTK_WIDGET(J.view)), u);
+}
+
 static void copy_selection(GtkTextView *view, gboolean cut) {
+    (void)view;
     GtkTextIter s, e;
     if (!gtk_text_buffer_get_selection_bounds(J.buf, &s, &e))
         return;
-    char *text = serialize_range(J.buf, &s, &e);
-    GdkContentProvider *providers[2];
-    guint n = 0;
-    /* A lone selected image also goes on the clipboard as a real image for other apps. */
+    g_autofree char *text = serialize_range(J.buf, &s, &e);
     GdkPaintable *p = gtk_text_iter_get_paintable(&s);
-    if (gtk_text_iter_get_offset(&e) - gtk_text_iter_get_offset(&s) == 1 && JOT_IS_IMAGE(p)) {
-        g_autoptr(GBytes) png = gdk_texture_save_to_png_bytes(JOT_IMAGE(p)->texture);
-        providers[n++] = gdk_content_provider_new_for_bytes("image/png", png);
-    }
-    g_autoptr(GBytes) bytes = g_bytes_new_take(text, strlen(text));
-    providers[n++] = gdk_content_provider_new_for_bytes("text/plain;charset=utf-8", bytes);
-    g_autoptr(GdkContentProvider) u = gdk_content_provider_new_union(providers, n);
-    gdk_clipboard_set_content(gtk_widget_get_clipboard(GTK_WIDGET(view)), u);
+    gboolean lone = gtk_text_iter_get_offset(&e) - gtk_text_iter_get_offset(&s) == 1 && JOT_IS_IMAGE(p);
+    clipboard_set(text, lone ? JOT_IMAGE(p) : NULL);
     if (cut) {
         gtk_text_buffer_begin_user_action(J.buf);
         gtk_text_buffer_delete_selection(J.buf, TRUE, TRUE);
@@ -911,18 +917,7 @@ static void on_right_click(GtkGestureClick *g, int n_press, double x, double y, 
 /* Keyboard editing                                                           */
 /* ------------------------------------------------------------------------- */
 
-static void indent_lines(int direction) {
-    GtkTextIter s, e;
-    int first, last;
-    if (gtk_text_buffer_get_selection_bounds(J.buf, &s, &e)) {
-        first = gtk_text_iter_get_line(&s);
-        last = gtk_text_iter_get_line(&e);
-        if (gtk_text_iter_starts_line(&e) && last > first)
-            last--;
-    } else {
-        cursor_iter(&s);
-        first = last = gtk_text_iter_get_line(&s);
-    }
+static void indent_range(int first, int last, int direction) {
     gtk_text_buffer_begin_user_action(J.buf);
     for (int ln = first; ln <= last; ln++) {
         GtkTextIter it, end;
@@ -946,6 +941,22 @@ static void indent_lines(int direction) {
     gtk_text_buffer_end_user_action(J.buf);
 }
 
+/* Indents/dedents the selected lines, or the cursor's line. */
+static void indent_lines(int direction) {
+    GtkTextIter s, e;
+    int first, last;
+    if (gtk_text_buffer_get_selection_bounds(J.buf, &s, &e)) {
+        first = gtk_text_iter_get_line(&s);
+        last = gtk_text_iter_get_line(&e);
+        if (gtk_text_iter_starts_line(&e) && last > first)
+            last--;
+    } else {
+        cursor_iter(&s);
+        first = last = gtk_text_iter_get_line(&s);
+    }
+    indent_range(first, last, direction);
+}
+
 static void replace_selection(const char *text) {
     gtk_text_buffer_begin_user_action(J.buf);
     gtk_text_buffer_delete_selection(J.buf, TRUE, TRUE);
@@ -953,8 +964,13 @@ static void replace_selection(const char *text) {
     gtk_text_buffer_end_user_action(J.buf);
 }
 
+static gboolean vim_key(guint keyval, GdkModifierType mods);
+
 static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code, GdkModifierType mods, gpointer unused) {
     (void)c, (void)code, (void)unused;
+    if (vim_key(keyval, mods))
+        return TRUE; /* normal/visual mode, or Esc & friends in insert mode */
+    /* Insert mode from here on. */
     mods &= gtk_accelerator_get_default_mod_mask();
     if ((keyval == GDK_KEY_Tab || keyval == GDK_KEY_ISO_Left_Tab) && !(mods & ~GDK_SHIFT_MASK)) {
         gboolean shift = (mods & GDK_SHIFT_MASK) || keyval == GDK_KEY_ISO_Left_Tab;
@@ -983,7 +999,11 @@ static gboolean on_key(GtkEventControllerKey *c, guint keyval, guint code, GdkMo
 }
 
 static void apply_font(void) {
-    g_autofree char *css = g_strdup_printf("textview.jot { font-size: %dpt; }", J.font_size);
+    g_autofree char *css = g_strdup_printf("textview.jot { font-size: %dpt; }\n"
+                                           ".jot-statusline { font-size: %dpt;"
+                                           " padding: 3px 12px; }\n"
+                                           ".jot-statusline text { padding: 0; min-height: 0; }\n",
+                                           J.font_size, J.font_size);
     gtk_css_provider_load_from_string(J.css, css);
     if (J.gutter)
         gtk_widget_queue_resize(J.gutter); /* digit width changed */
@@ -1106,6 +1126,12 @@ static void on_gutter_mark_set(GtkTextBuffer *buf, GtkTextIter *it, GtkTextMark 
         gutter_redraw(); /* current-line highlight */
 }
 
+static void set_line_numbers(gboolean show) {
+    J.line_numbers = show;
+    gtk_text_view_set_gutter(J.view, GTK_TEXT_WINDOW_LEFT, show ? J.gutter : NULL);
+    g_idle_add(fit_images, NULL);
+}
+
 static void on_gutter_scroll(GtkAdjustment *adj, gpointer unused) {
     (void)adj, (void)unused;
     gutter_redraw();
@@ -1153,93 +1179,52 @@ static JotImage *find_in_images(const GtkTextIter *from, const GtkTextIter *limi
     }
 }
 
-/* Selects the next/previous match, in the text or in an image's OCR text, wrapping around.
- * `again` starts after the current match. */
-static void find(gboolean forward, gboolean again) {
-    GtkWidget *entry = GTK_WIDGET(J.find_entry);
-    const char *q = gtk_editable_get_text(GTK_EDITABLE(entry));
-    gtk_widget_remove_css_class(entry, "error");
-    gtk_label_set_text(J.find_note, "");
+typedef struct {
+    GtkTextIter start, end;
+    JotImage *img; /* set when the match is in an image's OCR text */
+    char *line;    /* ...and this is the matching line of that text (owned) */
+    gboolean wrapped;
+} Match;
+
+/* Finds q from `from` (inclusive going forward; before it going backward), in the text or in an
+ * image's OCR text, wrapping around the end of the page. */
+static gboolean find_match(const char *q, gboolean case_sensitive, const GtkTextIter *from_in, gboolean forward,
+                           Match *m) {
     if (!*q)
-        return;
+        return FALSE;
     g_autofree char *qfold = g_utf8_casefold(q, -1);
-    GtkTextIter s, e, from, ms, me, at;
-    if (!gtk_text_buffer_get_selection_bounds(J.buf, &s, &e)) {
-        cursor_iter(&s);
-        e = s;
-    }
-    from = forward && again ? e : s;
-    const GtkTextSearchFlags f = GTK_TEXT_SEARCH_CASE_INSENSITIVE | GTK_TEXT_SEARCH_TEXT_ONLY;
+    GtkTextSearchFlags f = GTK_TEXT_SEARCH_TEXT_ONLY | (case_sensitive ? 0 : GTK_TEXT_SEARCH_CASE_INSENSITIVE);
+    GtkTextIter from = *from_in, ms, me, at;
     for (int attempt = 0; attempt < 2; attempt++) {
         gboolean ok = forward ? gtk_text_iter_forward_search(&from, q, f, &ms, &me, NULL)
                               : gtk_text_iter_backward_search(&from, q, f, &ms, &me, NULL);
         /* An image between here and the text match is closer. */
-        g_autofree char *line = NULL;
+        char *line = NULL;
         JotImage *img = find_in_images(&from, ok ? (forward ? &ms : &me) : NULL, forward, qfold, &at, &line);
+        m->wrapped = attempt == 1;
         if (img) {
-            GtkTextIter next = at;
-            gtk_text_iter_forward_char(&next);
-            gtk_text_buffer_select_range(J.buf, &at, &next);
-            gtk_text_view_scroll_to_iter(J.view, &at, 0.1, FALSE, 0, 0);
-            g_autofree char *note = g_strdup_printf("in image: %s", line);
-            gtk_label_set_text(J.find_note, note);
-            return;
+            m->start = m->end = at;
+            gtk_text_iter_forward_char(&m->end);
+            m->img = img;
+            m->line = line;
+            return TRUE;
         }
         if (ok) {
-            gtk_text_buffer_select_range(J.buf, &ms, &me);
-            gtk_text_view_scroll_to_iter(J.view, &ms, 0.1, FALSE, 0, 0);
-            return;
+            m->start = ms;
+            m->end = me;
+            m->img = NULL;
+            m->line = NULL;
+            return TRUE;
         }
         if (forward)
             gtk_text_buffer_get_start_iter(J.buf, &from);
         else
             gtk_text_buffer_get_end_iter(J.buf, &from);
     }
-    gtk_widget_add_css_class(entry, "error");
-}
-
-static void on_find_changed(GtkSearchEntry *e, gpointer unused) {
-    (void)e, (void)unused;
-    find(TRUE, FALSE);
-}
-
-static void on_find_next(GtkSearchEntry *e, gpointer unused) {
-    (void)e, (void)unused;
-    find(TRUE, TRUE);
-}
-
-static void on_find_prev(GtkSearchEntry *e, gpointer unused) {
-    (void)e, (void)unused;
-    find(FALSE, TRUE);
-}
-
-static gboolean on_find_key(GtkEventControllerKey *c, guint keyval, guint code, GdkModifierType mods, gpointer unused) {
-    (void)c, (void)code, (void)unused;
-    if ((keyval == GDK_KEY_Return || keyval == GDK_KEY_KP_Enter) && (mods & GDK_SHIFT_MASK)) {
-        find(FALSE, TRUE);
-        return TRUE;
-    }
     return FALSE;
 }
 
-static void on_find_mode(GtkSearchBar *bar, GParamSpec *ps, gpointer unused) {
-    (void)ps, (void)unused;
-    if (!gtk_search_bar_get_search_mode(bar))
-        gtk_widget_grab_focus(GTK_WIDGET(J.view));
-}
-
-static void open_find(void) {
-    /* Seed the search with a short single-line selection, like most editors. */
-    GtkTextIter s, e;
-    if (gtk_text_buffer_get_selection_bounds(J.buf, &s, &e) && gtk_text_iter_get_line(&s) == gtk_text_iter_get_line(&e)) {
-        g_autofree char *sel = gtk_text_buffer_get_text(J.buf, &s, &e, FALSE);
-        if (g_utf8_strlen(sel, -1) <= 100)
-            gtk_editable_set_text(GTK_EDITABLE(J.find_entry), sel);
-    }
-    gtk_search_bar_set_search_mode(J.find_bar, TRUE);
-    gtk_widget_grab_focus(GTK_WIDGET(J.find_entry));
-    gtk_editable_select_region(GTK_EDITABLE(J.find_entry), 0, -1);
-}
+#include "vim.c" /* vim-style modal editing; a unity build, so it shares this file's statics */
 
 /* ------------------------------------------------------------------------- */
 /* Actions                                                                    */
@@ -1248,7 +1233,10 @@ static void open_find(void) {
 #define ACTION(name) static void act_##name(GSimpleAction *a, GVariant *p, gpointer d)
 #define UNUSED (void)a, (void)p, (void)d
 
-ACTION(find) { UNUSED; open_find(); }
+ACTION(find) {
+    UNUSED;
+    vim_search_prompt();
+}
 ACTION(copy_image_text) {
     UNUSED;
     JotImage *img = selected_image();
@@ -1295,13 +1283,11 @@ static const struct {
     const char *action;
     const char *accels[4];
 } accels[] = {
-    {"win.find", {"<Ctrl>f", NULL}},
     {"win.copy-image-text", {"<Ctrl><Shift>c", NULL}},
     {"win.save", {"<Ctrl>s", NULL}},
     {"win.zoom-in", {"<Ctrl>plus", "<Ctrl>equal", "<Ctrl>KP_Add", NULL}},
     {"win.zoom-out", {"<Ctrl>minus", "<Ctrl>KP_Subtract", NULL}},
     {"win.zoom-reset", {"<Ctrl>0", NULL}},
-    {"win.close", {"<Ctrl>w", NULL}},
     {"app.quit", {"<Ctrl>q", NULL}},
 };
 
@@ -1341,6 +1327,8 @@ static GtkWidget *build_editor(void) {
     g_signal_connect(J.buf, "changed", G_CALLBACK(on_changed), NULL);
 
     J.gutter = g_object_new(JOT_TYPE_GUTTER, NULL);
+    J.line_numbers = TRUE;
+    g_object_ref_sink(J.gutter); /* kept while hidden by :set nonu */
     gtk_text_view_set_gutter(v, GTK_TEXT_WINDOW_LEFT, J.gutter);
     g_signal_connect(J.buf, "changed", G_CALLBACK(on_gutter_buffer_changed), NULL);
     g_signal_connect(J.buf, "mark-set", G_CALLBACK(on_gutter_mark_set), NULL);
@@ -1402,35 +1390,6 @@ static GtkWidget *build_editor(void) {
     return scroller;
 }
 
-static GtkWidget *build_find_bar(void) {
-    J.find_entry = GTK_SEARCH_ENTRY(gtk_search_entry_new());
-    gtk_search_entry_set_placeholder_text(J.find_entry, "Find  (Enter next, Shift+Enter previous)");
-    gtk_widget_set_size_request(GTK_WIDGET(J.find_entry), 360, -1);
-    g_signal_connect(J.find_entry, "search-changed", G_CALLBACK(on_find_changed), NULL);
-    g_signal_connect(J.find_entry, "activate", G_CALLBACK(on_find_next), NULL);
-    g_signal_connect(J.find_entry, "next-match", G_CALLBACK(on_find_next), NULL);
-    g_signal_connect(J.find_entry, "previous-match", G_CALLBACK(on_find_prev), NULL);
-    GtkEventController *keys = gtk_event_controller_key_new();
-    gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
-    g_signal_connect(keys, "key-pressed", G_CALLBACK(on_find_key), NULL);
-    gtk_widget_add_controller(GTK_WIDGET(J.find_entry), keys);
-
-    J.find_note = GTK_LABEL(gtk_label_new(NULL));
-    gtk_label_set_ellipsize(J.find_note, PANGO_ELLIPSIZE_END);
-    gtk_label_set_max_width_chars(J.find_note, 50);
-    gtk_widget_add_css_class(GTK_WIDGET(J.find_note), "dim-label");
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
-    gtk_box_append(GTK_BOX(box), GTK_WIDGET(J.find_entry));
-    gtk_box_append(GTK_BOX(box), GTK_WIDGET(J.find_note));
-
-    J.find_bar = GTK_SEARCH_BAR(gtk_search_bar_new());
-    gtk_search_bar_set_child(J.find_bar, box);
-    gtk_search_bar_connect_entry(J.find_bar, GTK_EDITABLE(J.find_entry));
-    gtk_search_bar_set_show_close_button(J.find_bar, TRUE);
-    g_signal_connect(J.find_bar, "notify::search-mode-enabled", G_CALLBACK(on_find_mode), NULL);
-    return GTK_WIDGET(J.find_bar);
-}
-
 static GtkWidget *build_header(void) {
     const char *home = g_get_home_dir();
     g_autofree char *pretty = g_str_has_prefix(page_path, home) ? g_strconcat("~", page_path + strlen(home), NULL)
@@ -1439,7 +1398,6 @@ static GtkWidget *build_header(void) {
     adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), adw_window_title_new("jot", pretty));
 
     g_autoptr(GMenu) menu = g_menu_new();
-    g_menu_append(menu, "Find…", "win.find");
     g_menu_append(menu, "Open notes folder", "win.open-folder");
     g_menu_append(menu, "Zoom in", "win.zoom-in");
     g_menu_append(menu, "Zoom out", "win.zoom-out");
@@ -1450,7 +1408,7 @@ static GtkWidget *build_header(void) {
     adw_header_bar_pack_end(ADW_HEADER_BAR(header), menu_btn);
 
     GtkWidget *find_btn = gtk_button_new_from_icon_name("edit-find-symbolic");
-    gtk_widget_set_tooltip_text(find_btn, "Find (Ctrl+F)");
+    gtk_widget_set_tooltip_text(find_btn, "Search (/)");
     gtk_actionable_set_action_name(GTK_ACTIONABLE(find_btn), "win.find");
     adw_header_bar_pack_end(ADW_HEADER_BAR(header), find_btn);
     return header;
@@ -1477,7 +1435,7 @@ static void on_activate(GtkApplication *app, gpointer unused) {
     adw_toast_overlay_set_child(J.toasts, build_editor());
     GtkWidget *tv = adw_toolbar_view_new();
     adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(tv), build_header());
-    adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(tv), build_find_bar());
+    adw_toolbar_view_add_bottom_bar(ADW_TOOLBAR_VIEW(tv), vim_build_bar());
     adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(tv), GTK_WIDGET(J.toasts));
     adw_application_window_set_content(ADW_APPLICATION_WINDOW(J.win), tv);
 
@@ -1490,7 +1448,10 @@ static void on_activate(GtkApplication *app, gpointer unused) {
     g_signal_connect(J.win, "close-request", G_CALLBACK(on_close), NULL);
     g_signal_connect(J.win, "notify::is-active", G_CALLBACK(on_active), NULL);
 
+    if (!state_bool("line_numbers", TRUE))
+        set_line_numbers(FALSE);
     load_page();
+    vim_init();
     update_image_selection();
     gtk_window_present(J.win);
     gtk_widget_grab_focus(GTK_WIDGET(J.view));
