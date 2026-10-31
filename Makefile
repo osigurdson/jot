@@ -30,11 +30,14 @@ check: test_jot
 
 install: jot
 	install -Dm755 jot $(PREFIX)/bin/jot
+	install -Dm644 data/dev.jot.Jot.svg $(PREFIX)/share/icons/hicolor/scalable/apps/dev.jot.Jot.svg
+	-gtk-update-icon-cache -q -t $(PREFIX)/share/icons/hicolor
 	install -Dm644 /dev/stdin $(PREFIX)/share/applications/dev.jot.Jot.desktop <<< \
-	  "$$(printf '[Desktop Entry]\nName=jot\nComment=Quick monospace notes with screenshots\nExec=$(PREFIX)/bin/jot\nIcon=accessories-text-editor\nTerminal=false\nType=Application\nCategories=Utility;TextEditor;Development;\nStartupWMClass=dev.jot.Jot\n')"
+	  "$$(printf '[Desktop Entry]\nName=jot\nComment=Quick monospace notes with screenshots\nExec=$(PREFIX)/bin/jot\nIcon=dev.jot.Jot\nTerminal=false\nType=Application\nCategories=Utility;TextEditor;Development;\nStartupWMClass=dev.jot.Jot\n')"
 
 uninstall:
 	rm -f $(PREFIX)/bin/jot $(PREFIX)/share/applications/dev.jot.Jot.desktop
+	rm -f $(PREFIX)/share/icons/hicolor/scalable/apps/dev.jot.Jot.svg
 
 clean:
 	rm -f jot test_jot *.o compile_flags.txt

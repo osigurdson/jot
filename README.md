@@ -1,17 +1,16 @@
+<img src="data/dev.jot.Jot.svg" alt="jot's icon: a worn-out 1980s game cartridge labeled JOT" align="right" width="128">
+
 # jot
 
-A fast, local scratchpad for programmers: one plain-text page, vim keys, and screenshots you can paste in and search.
+Here is the idea: 
+1. You use vim / nvim
+2. You need to take quick / scratch notes but aren't ready to organize them yet. 
+3. Sometimes you need to take screen captures - not everything is text
+4. You want to be able to search the text and the images (using a radical new technology called O.C.R.). Note that you need to install Tesseract for that (see below).
+
+Well, that is what this thing does. It is a tiny (< 1MiB) 100% local UI app (Linux only atm) written in C. It is vibed coded but so far works well enough for me. 
 
 ![jot searching for "u32": the matches are highlighted inside a pasted screenshot of a compiler error](docs/screenshot.png)
-
-While you work, you collect things: an error, a command that worked, a screenshot of something you'll need in ten minutes. Word processors fight you over fonts and formatting, and note apps want you to organize everything first.
-
-jot is just a page. Open it, paste, type, move on. It's for the messy notes you take on the way to understanding something, not for finished documents.
-
-Before you try it:
-
-- **jot uses vim keys, and there's no other editing mode.** If you don't know vim, it isn't for you yet.
-- **It runs on Linux** (GTK4). Your notes stay on your machine: there's no account, no sync and no network access.
 
 ## Install
 
