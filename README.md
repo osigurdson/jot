@@ -61,6 +61,8 @@ Click an image, or move the cursor onto it, to select it. Then `gx` opens it, `y
 └── CLAUDE.md              a link to AGENTS.md
 ```
 
+Jot creates private folders (`0700`) and files (`0600`). Opening an existing page also makes its note and asset folders private, protecting existing contents from other local accounts.
+
 You can grep the folder, edit `jot.md` in another editor, or keep it in git. If you edit it elsewhere, jot reloads it when you switch back, as long as jot has no unsaved typing. `:Ex` opens the folder in your file manager.
 
 ## Using it with coding agents

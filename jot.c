@@ -12,6 +12,7 @@
 #include <gdk/wayland/gdkwayland.h>
 #endif
 #include <glib/gstdio.h>
+#include <errno.h>
 #include <math.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -215,6 +216,11 @@ static char *import_image_file(const char *path) {
     g_autoptr(GFile) dst = g_file_new_for_path(dest);
     if (!g_file_copy(src, dst, G_FILE_COPY_NONE, NULL, NULL, NULL, NULL))
         return NULL;
+    /* GFile copy can preserve the source mode despite our private umask. */
+    if (g_chmod(dest, 0600) != 0) {
+        g_unlink(dest);
+        return NULL;
+    }
     return g_strconcat("assets/", name, NULL);
 }
 
@@ -451,7 +457,7 @@ static void save_state(void) {
     g_key_file_set_boolean(k, "window", "line_numbers", J.line_numbers);
     g_key_file_set_boolean(k, "window", "markdown", md_enabled());
     g_autofree char *dir = g_path_get_dirname(state_path);
-    g_mkdir_with_parents(dir, 0755);
+    g_mkdir_with_parents(dir, 0700);
     g_key_file_save_to_file(k, state_path, NULL);
 }
 
@@ -1709,12 +1715,16 @@ static void write_agent_files(void) {
 }
 
 static void init_paths(const char *arg) {
+    /* Also inherited by Tesseract, so its text and TSV output stays private. */
+    umask(0077);
     notes_dir = resolve_dir(arg);
     assets_dir = g_build_filename(notes_dir, "assets", NULL);
     page_path = g_build_filename(notes_dir, "jot.md", NULL);
     state_path = g_build_filename(g_get_user_config_dir(), "jot", "state.ini", NULL);
     gboolean fresh = !g_file_test(page_path, G_FILE_TEST_EXISTS);
-    g_mkdir_with_parents(assets_dir, 0755);
+    if (g_mkdir_with_parents(assets_dir, 0700) != 0 ||
+        g_chmod(notes_dir, 0700) != 0 || g_chmod(assets_dir, 0700) != 0)
+        g_error("Cannot make note directories private: %s", g_strerror(errno));
     if (fresh)
         write_agent_files();
     img_re = g_regex_new("^!\\[[^\\]]*\\]\\((assets/[^)\\s/]+)\\)$", 0, 0, NULL);

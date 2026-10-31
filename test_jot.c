@@ -468,6 +468,9 @@ static gboolean step(gpointer unused) {
         {
             g_autofree char *tsv = ocr_sidecar_ext(ocr_rel, ".tsv");
             CHECK(g_file_test(tsv, G_FILE_TEST_EXISTS), "word positions saved in %s.tsv", ocr_rel);
+            struct stat permissions;
+            CHECK(stat(tsv, &permissions) == 0 && (permissions.st_mode & 0777) == 0600,
+                  "OCR subprocess creates private sidecars");
         }
         /* The image is 720x110; "Segmentation" is the first word of the first line, at x=14 y=14. */
         CHECK(sel && sel->hl && sel->hl->len == 1, "the matched word is highlighted (%u rects)",
@@ -1068,7 +1071,19 @@ static void on_test_activate(GtkApplication *app, gpointer d) {
 }
 
 int main(void) {
+    /* Existing permissive folders must become private even under a loose umask. */
+    g_autofree char *dir = resolve_dir(NULL);
+    g_autofree char *assets = g_build_filename(dir, "assets", NULL);
+    g_mkdir_with_parents(assets, 0755);
+    g_chmod(dir, 0755);
+    g_chmod(assets, 0755);
+    umask(0022);
     init_paths(NULL);
+    struct stat permissions;
+    CHECK(stat(notes_dir, &permissions) == 0 && (permissions.st_mode & 0777) == 0700,
+          "existing note folder becomes private");
+    CHECK(stat(assets_dir, &permissions) == 0 && (permissions.st_mode & 0777) == 0700,
+          "existing asset folder becomes private");
     g_autoptr(AdwApplication) app = adw_application_new("dev.jot.JotTest", G_APPLICATION_NON_UNIQUE);
     g_signal_connect(app, "activate", G_CALLBACK(on_test_activate), NULL);
     g_application_run(G_APPLICATION(app), 0, NULL);
