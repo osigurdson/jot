@@ -2,7 +2,13 @@
 #ifndef JOT_H
 #define JOT_H
 
+#ifdef JOT_LITE
+#include "lite.h"
+#else
 #include <adwaita.h>
+#endif
+
+#include "ui.h"
 
 #define APP_ID "dev.jot.Jot"
 #define OBJ_UTF8 "\xef\xbf\xbc" /* U+FFFC: what GtkTextBuffer reports for an embedded image */
@@ -13,6 +19,33 @@
 /* ------------------------------------------------------------------------- */
 
 extern char *notes_dir, *page_path;
+
+#ifdef JOT_LITE
+
+/* An image in the page; the platform owns everything past `path` (pixels, its fitted size...). */
+typedef struct JotImage {
+    int refs;
+    char *path; /* "assets/x.png", relative to notes_dir */
+    gboolean selected;
+    void *platform;
+} JotImage;
+
+#define JOT_IS_IMAGE(p) ((p) != NULL)
+#define JOT_IMAGE(p) (p)
+#define GDK_PAINTABLE(p) (p)
+static inline JotImage *g_object_ref(JotImage *img) {
+    lite_image_ref(img);
+    return img;
+}
+#define g_object_unref lite_image_unref
+#define g_clear_object(pp) g_clear_pointer(pp, lite_image_unref)
+
+typedef struct {
+    GtkTextBuffer *buf;
+    gboolean line_numbers;
+} Jot;
+
+#else
 
 /* A texture shown at its true on-screen size (HiDPI aware), shrunk to fit the view. */
 #define JOT_TYPE_IMAGE (jot_image_get_type())
@@ -46,6 +79,8 @@ typedef struct {
     int font_size;
 } Jot;
 
+#endif
+
 extern Jot J;
 
 /* A search match, in the text or in an image's OCR text. */
@@ -62,8 +97,11 @@ void cursor_iter(GtkTextIter *it);
 char *serialize(GtkTextBuffer *buf);
 char *serialize_range(GtkTextBuffer *buf, const GtkTextIter *start, const GtkTextIter *end);
 void insert_text(GtkTextBuffer *buf, GtkTextIter *it, const char *raw);
-char *save_texture(GdkTexture *tex);
 void insert_images(GPtrArray *rels, const GtkTextIter *at);
+JotImage *load_image(const char *rel);
+const char *ocr_lookup(const char *rel); /* an image's text, NULL if not read yet */
+void ocr_request(const char *rel);
+gboolean is_obj_char(gunichar ch, gpointer unused);
 void after_insert(void);
 void open_image(JotImage *img);
 void image_set_highlight(JotImage *img, const char *q);
@@ -75,6 +113,9 @@ guint ocr_pending_count(void); /* images queued for, or in, OCR */
 
 /* Editing, view */
 void indent_range(int first, int last, int direction);
+void edit_type(const char *text);
+void edit_return(void);
+void edit_tab(gboolean shift);
 void set_line_numbers(gboolean show);
 gboolean find_match(const char *q, gboolean case_sensitive, const GtkTextIter *from, gboolean forward, Match *m);
 
@@ -92,10 +133,15 @@ int md_heading_line(int line, int dir);
 /* vim.c                                                                      */
 /* ------------------------------------------------------------------------- */
 
-GtkWidget *vim_build_bar(void);
 void vim_init(void);
-gboolean vim_key(guint keyval, GdkModifierType mods);
 gboolean vim_image_cursor_mode(void);
 void vim_ocr_changed(gboolean finished); /* the OCR queue changed; finished = a read completed */
+
+#ifndef JOT_LITE
+/* ui_gtk.c and jot.c, Linux only (the rest of ui_gtk.c is in ui.h) */
+GtkWidget *ui_build_bar(void);
+gboolean ui_key(guint keyval, GdkModifierType mods);
+char *save_texture(GdkTexture *tex);
+#endif
 
 #endif

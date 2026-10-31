@@ -1,0 +1,270 @@
+/* lite.h - the small part of GLib and GtkTextBuffer that the engine (vim.c, md.c, core.c) uses,
+ * for platforms without GTK. Same names and same behavior, so those files need no changes, and
+ * test_engine.c runs one set of key scripts against this and against real GTK to keep it honest.
+ *
+ * Add to this only what the engine calls. It is not a GLib port.
+ */
+#ifndef JOT_LITE_H
+#define JOT_LITE_H
+
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* ---- Types and macros ---------------------------------------------------- */
+
+typedef int gboolean;
+typedef unsigned int guint;
+typedef uint32_t gunichar;
+typedef size_t gsize;
+typedef void *gpointer;
+typedef int64_t gint64;
+typedef long glong;
+typedef uint32_t guint32;
+
+#define TRUE 1
+#define FALSE 0
+#define G_MAXINT 2147483647
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define CLAMP(x, lo, hi) ((x) > (hi) ? (hi) : (x) < (lo) ? (lo) : (x))
+#define G_SOURCE_REMOVE FALSE
+#define G_PRIORITY_HIGH_IDLE 100
+#define G_CALLBACK(f) ((void (*)(void))(f))
+
+#define g_free free
+#define g_new0(T, n) ((T *)g_malloc0(sizeof(T) * (gsize)(n)))
+void *g_malloc0(gsize n);
+void *g_steal_ptr(void *pp);
+#define g_steal_pointer(pp) ((__typeof__(*(pp)))g_steal_ptr(pp))
+#define g_clear_pointer(pp, destroy)   \
+    do {                               \
+        if (*(pp))                     \
+            destroy(*(pp));            \
+        *(pp) = NULL;                  \
+    } while (0)
+
+static inline void lite_free_ptr(void *pp) {
+    free(*(void **)pp);
+}
+#define g_autofree __attribute__((cleanup(lite_free_ptr)))
+#define g_autoptr(T) __attribute__((cleanup(lite_unref_##T))) T *
+#define g_auto(T) __attribute__((cleanup(lite_unref_##T))) T
+
+/* ---- Strings ------------------------------------------------------------- */
+
+char *g_strdup(const char *s);
+char *g_strndup(const char *s, gsize n);
+char *g_strdup_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+char *g_strconcat(const char *first, ...) __attribute__((sentinel));
+char *g_strstrip(char *s);
+char **g_strsplit(const char *s, const char *sep, int max);
+void g_strfreev(char **v);
+char *g_path_get_basename(const char *path);
+gboolean g_str_equal(const void *a, const void *b);
+gboolean g_str_has_prefix(const char *s, const char *prefix);
+gboolean g_str_has_suffix(const char *s, const char *suffix);
+#define g_snprintf snprintf
+#define g_ascii_isdigit(c) ((c) >= '0' && (c) <= '9')
+#define g_ascii_isalpha(c) (((c) >= 'a' && (c) <= 'z') || ((c) >= 'A' && (c) <= 'Z'))
+#define g_ascii_isalnum(c) (g_ascii_isalpha(c) || g_ascii_isdigit(c))
+
+typedef char **GStrv;
+static inline void lite_unref_GStrv(GStrv *v) {
+    g_strfreev(*v);
+}
+
+typedef struct {
+    char *str;
+    gsize len, cap;
+} GString;
+
+GString *g_string_new(const char *init);
+char *g_string_free(GString *s, gboolean free_segment);
+GString *g_string_append(GString *s, const char *t);
+GString *g_string_append_len(GString *s, const char *t, gsize n);
+GString *g_string_append_c(GString *s, char c);
+GString *g_string_append_unichar(GString *s, gunichar c);
+GString *g_string_prepend_c(GString *s, char c);
+GString *g_string_truncate(GString *s, gsize n);
+void g_string_append_printf(GString *s, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+guint g_string_replace(GString *s, const char *find, const char *with, guint limit);
+static inline void lite_unref_GString(GString **s) {
+    if (*s)
+        g_string_free(*s, TRUE);
+}
+
+typedef struct {
+    void **pdata;
+    guint len, cap;
+    void (*free_fn)(void *);
+} GPtrArray;
+
+GPtrArray *g_ptr_array_new_with_free_func(void (*free_fn)(void *));
+void g_ptr_array_add(GPtrArray *a, void *p);
+void g_ptr_array_unref(GPtrArray *a);
+static inline void lite_unref_GPtrArray(GPtrArray **a) {
+    if (*a)
+        g_ptr_array_unref(*a);
+}
+
+/* ---- Unicode ------------------------------------------------------------- */
+
+gunichar g_utf8_get_char(const char *p);
+#define g_utf8_next_char(p) ((const char *)((p) + lite_utf8_skip(*(const unsigned char *)(p))))
+int lite_utf8_skip(unsigned char c);
+int g_unichar_to_utf8(gunichar c, char *out);
+long g_utf8_strlen(const char *p, long max_bytes);
+long g_utf8_pointer_to_offset(const char *s, const char *pos);
+gunichar *g_utf8_to_ucs4_fast(const char *s, long len, long *items);
+char *g_utf8_casefold(const char *s, long len);
+gboolean g_unichar_isspace(gunichar c);
+gboolean g_unichar_isupper(gunichar c);
+gboolean g_unichar_isalnum(gunichar c);
+gunichar g_unichar_tolower(gunichar c);
+gunichar g_unichar_toupper(gunichar c);
+
+/* ---- Regular expressions (PCRE2, like GRegex) ------------------------------ */
+
+typedef struct {
+    char *message;
+} GError;
+typedef struct GRegex GRegex;
+typedef struct GMatchInfo GMatchInfo;
+
+#define G_REGEX_OPTIMIZE 0
+#define G_REGEX_CASELESS 1
+#define G_REGEX_MATCH_ANCHORED 1
+
+GRegex *g_regex_new(const char *pattern, int compile_flags, int match_flags, GError **err);
+void g_regex_unref(GRegex *re);
+gboolean g_regex_match(const GRegex *re, const char *s, int flags, GMatchInfo **mi);
+gboolean g_regex_match_full(const GRegex *re, const char *s, long len, int start, int flags, GMatchInfo **mi, GError **err);
+gboolean g_match_info_matches(const GMatchInfo *mi);
+gboolean g_match_info_next(GMatchInfo *mi, GError **err);
+void g_match_info_fetch_pos(const GMatchInfo *mi, int group, int *start, int *end);
+char *g_match_info_fetch(const GMatchInfo *mi, int group);
+char *g_match_info_expand_references(const GMatchInfo *mi, const char *rep, GError **err);
+void g_match_info_unref(GMatchInfo *mi);
+char *g_regex_replace_literal(const GRegex *re, const char *s, long len, int start, const char *rep, int flags, GError **err);
+char *g_regex_replace_eval(const GRegex *re, const char *s, long len, int start, int flags,
+                           gboolean (*eval)(const GMatchInfo *, GString *, gpointer), gpointer data, GError **err);
+void g_error_free(GError *e);
+static inline void lite_unref_GRegex(GRegex **r) {
+    if (*r)
+        g_regex_unref(*r);
+}
+static inline void lite_unref_GMatchInfo(GMatchInfo **m) {
+    if (*m)
+        g_match_info_unref(*m);
+}
+static inline void lite_unref_GError(GError **e) {
+    if (*e)
+        g_error_free(*e);
+}
+
+/* ---- Idle callbacks: the platform runs them with lite_idle_run() before painting ------- */
+
+guint g_idle_add_full(int priority, gboolean (*fn)(gpointer), gpointer data, void (*destroy)(gpointer));
+void lite_idle_run(void);
+gboolean lite_idle_pending(void);
+
+/* ---- Text buffer ---------------------------------------------------------- */
+
+typedef struct GtkTextBuffer GtkTextBuffer;
+typedef struct GtkTextMark GtkTextMark;
+typedef struct LiteTag GtkTextTag;
+typedef struct JotImage GdkPaintable; /* an embedded image: U+FFFC in the text */
+
+typedef struct {
+    GtkTextBuffer *buf;
+    int off;
+} GtkTextIter;
+
+typedef enum {
+    GTK_TEXT_SEARCH_TEXT_ONLY = 1,
+    GTK_TEXT_SEARCH_CASE_INSENSITIVE = 2
+} GtkTextSearchFlags;
+
+/* The buffer keeps images alive with these (JotImage's own refcount). */
+void lite_image_ref(GdkPaintable *img);
+void lite_image_unref(GdkPaintable *img);
+
+GtkTextBuffer *gtk_text_buffer_new(void *unused);
+void gtk_text_buffer_free(GtkTextBuffer *b);
+
+GtkTextTag *gtk_text_buffer_create_tag(GtkTextBuffer *b, const char *name, const char *first_prop);
+void gtk_text_buffer_apply_tag(GtkTextBuffer *b, GtkTextTag *t, const GtkTextIter *s, const GtkTextIter *e);
+void gtk_text_buffer_remove_tag(GtkTextBuffer *b, GtkTextTag *t, const GtkTextIter *s, const GtkTextIter *e);
+unsigned lite_tags_at(GtkTextBuffer *b, int offset); /* bit n = the nth tag created */
+const gunichar *lite_chars(GtkTextBuffer *b);        /* unused by the engine; see lite_copy_line */
+int lite_copy_line(GtkTextBuffer *b, int line, gunichar *ch, unsigned *tags, int max);
+
+extern gboolean lite_merge_deletes;
+void gtk_text_buffer_begin_user_action(GtkTextBuffer *b);
+void gtk_text_buffer_end_user_action(GtkTextBuffer *b);
+void gtk_text_buffer_begin_irreversible_action(GtkTextBuffer *b);
+void gtk_text_buffer_end_irreversible_action(GtkTextBuffer *b);
+gboolean gtk_text_buffer_get_can_undo(GtkTextBuffer *b);
+gboolean gtk_text_buffer_get_can_redo(GtkTextBuffer *b);
+void gtk_text_buffer_undo(GtkTextBuffer *b);
+void gtk_text_buffer_redo(GtkTextBuffer *b);
+
+void gtk_text_buffer_insert(GtkTextBuffer *b, GtkTextIter *it, const char *text, int len);
+void gtk_text_buffer_insert_at_cursor(GtkTextBuffer *b, const char *text, int len);
+void gtk_text_buffer_insert_paintable(GtkTextBuffer *b, GtkTextIter *it, GdkPaintable *p);
+void gtk_text_buffer_delete(GtkTextBuffer *b, GtkTextIter *s, GtkTextIter *e);
+gboolean gtk_text_buffer_delete_selection(GtkTextBuffer *b, gboolean interactive, gboolean editable);
+void gtk_text_buffer_set_text(GtkTextBuffer *b, const char *text, int len);
+char *gtk_text_buffer_get_text(GtkTextBuffer *b, const GtkTextIter *s, const GtkTextIter *e, gboolean hidden);
+char *gtk_text_buffer_get_slice(GtkTextBuffer *b, const GtkTextIter *s, const GtkTextIter *e, gboolean hidden);
+
+int gtk_text_buffer_get_char_count(GtkTextBuffer *b);
+int gtk_text_buffer_get_line_count(GtkTextBuffer *b);
+void gtk_text_buffer_get_start_iter(GtkTextBuffer *b, GtkTextIter *it);
+void gtk_text_buffer_get_end_iter(GtkTextBuffer *b, GtkTextIter *it);
+void gtk_text_buffer_get_bounds(GtkTextBuffer *b, GtkTextIter *s, GtkTextIter *e);
+gboolean gtk_text_buffer_get_iter_at_line(GtkTextBuffer *b, GtkTextIter *it, int line);
+void gtk_text_buffer_get_iter_at_offset(GtkTextBuffer *b, GtkTextIter *it, int offset);
+void gtk_text_buffer_get_iter_at_mark(GtkTextBuffer *b, GtkTextIter *it, GtkTextMark *m);
+
+GtkTextMark *gtk_text_buffer_create_mark(GtkTextBuffer *b, const char *name, const GtkTextIter *at, gboolean left_gravity);
+void gtk_text_buffer_move_mark(GtkTextBuffer *b, GtkTextMark *m, const GtkTextIter *at);
+GtkTextMark *gtk_text_buffer_get_insert(GtkTextBuffer *b);
+void gtk_text_buffer_place_cursor(GtkTextBuffer *b, const GtkTextIter *at);
+void gtk_text_buffer_select_range(GtkTextBuffer *b, const GtkTextIter *ins, const GtkTextIter *bound);
+gboolean gtk_text_buffer_get_selection_bounds(GtkTextBuffer *b, GtkTextIter *s, GtkTextIter *e);
+gboolean gtk_text_buffer_get_has_selection(GtkTextBuffer *b);
+
+gunichar gtk_text_iter_get_char(const GtkTextIter *it);
+GdkPaintable *gtk_text_iter_get_paintable(const GtkTextIter *it);
+int gtk_text_iter_get_offset(const GtkTextIter *it);
+int gtk_text_iter_get_line(const GtkTextIter *it);
+int gtk_text_iter_get_line_offset(const GtkTextIter *it);
+void gtk_text_iter_set_line_offset(GtkTextIter *it, int col);
+gboolean gtk_text_iter_is_start(const GtkTextIter *it);
+gboolean gtk_text_iter_is_end(const GtkTextIter *it);
+gboolean gtk_text_iter_starts_line(const GtkTextIter *it);
+gboolean gtk_text_iter_ends_line(const GtkTextIter *it);
+gboolean gtk_text_iter_equal(const GtkTextIter *a, const GtkTextIter *b);
+int gtk_text_iter_compare(const GtkTextIter *a, const GtkTextIter *b);
+gboolean gtk_text_iter_forward_char(GtkTextIter *it);
+gboolean gtk_text_iter_backward_char(GtkTextIter *it);
+gboolean gtk_text_iter_forward_chars(GtkTextIter *it, int n);
+gboolean gtk_text_iter_forward_line(GtkTextIter *it);
+gboolean gtk_text_iter_forward_to_line_end(GtkTextIter *it);
+gboolean gtk_text_iter_forward_find_char(GtkTextIter *it, gboolean (*pred)(gunichar, gpointer), gpointer data, const GtkTextIter *limit);
+gboolean gtk_text_iter_backward_find_char(GtkTextIter *it, gboolean (*pred)(gunichar, gpointer), gpointer data, const GtkTextIter *limit);
+gboolean gtk_text_iter_forward_search(const GtkTextIter *it, const char *q, GtkTextSearchFlags f, GtkTextIter *ms, GtkTextIter *me, const GtkTextIter *limit);
+gboolean gtk_text_iter_backward_search(const GtkTextIter *it, const char *q, GtkTextSearchFlags f, GtkTextIter *ms, GtkTextIter *me, const GtkTextIter *limit);
+
+/* Signals: "insert-text", "delete-range", "changed", "mark-set", as GtkTextBuffer sends them. */
+void lite_signal_connect(GtkTextBuffer *b, const char *name, void (*fn)(void), gpointer data, int mode);
+#define g_signal_connect(o, name, fn, data) lite_signal_connect(o, name, fn, data, 0)
+#define g_signal_connect_after(o, name, fn, data) lite_signal_connect(o, name, fn, data, 1)
+#define g_signal_connect_swapped(o, name, fn, data) lite_signal_connect(o, name, fn, data, 2)
+
+#endif

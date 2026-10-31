@@ -302,6 +302,7 @@ void md_set_enabled(gboolean on) {
     md_flush(NULL);
 }
 
+#if !defined(JOT_LITE) && !defined(JOT_HEADLESS)
 /* ------------------------------------------------------------------------- */
 /* Colors (follow light/dark and the accent color)                            */
 /* ------------------------------------------------------------------------- */
@@ -333,12 +334,15 @@ static void on_md_style(AdwStyleManager *sm, GParamSpec *ps, gpointer unused) {
     md_colors();
 }
 
+#endif
+
 void md_init(void) {
     static const char *names[N_TAGS] = {"md-codeblock", "md-code",   "md-quote", "md-heading",
                                         "md-bold",      "md-italic", "md-bullet", "md-quote-mark",
                                         "md-link",      "md-done",   "md-dim"};
     for (int t = 0; t < N_TAGS; t++) /* created in priority order */
         M.tag[t] = gtk_text_buffer_create_tag(J.buf, names[t], NULL);
+#if !defined(JOT_LITE) && !defined(JOT_HEADLESS)
     g_object_set(M.tag[T_HEADING], "weight", PANGO_WEIGHT_BOLD, NULL);
     g_object_set(M.tag[T_BOLD], "weight", PANGO_WEIGHT_BOLD, NULL);
     g_object_set(M.tag[T_ITALIC], "style", PANGO_STYLE_ITALIC, NULL);
@@ -348,6 +352,7 @@ void md_init(void) {
     AdwStyleManager *sm = adw_style_manager_get_default();
     g_signal_connect(sm, "notify::dark", G_CALLBACK(on_md_style), NULL);
     g_signal_connect(sm, "notify::accent-color", G_CALLBACK(on_md_style), NULL);
+#endif
 
 #define RE(p) g_regex_new(p, G_REGEX_OPTIMIZE, 0, NULL)
     M.heading = RE("^(#{1,6})[ \\t]+(.*\\S)");
@@ -399,24 +404,12 @@ static char *md_url_at(const GtkTextIter *it) {
     return NULL;
 }
 
-static void url_launched(GObject *src, GAsyncResult *res, gpointer unused) {
-    (void)unused;
-    g_autoptr(GError) err = NULL;
-    if (!gtk_uri_launcher_launch_finish(GTK_URI_LAUNCHER(src), res, &err) &&
-        !g_error_matches(err, GTK_DIALOG_ERROR, GTK_DIALOG_ERROR_DISMISSED)) {
-        g_autofree char *msg = g_strdup_printf("Couldn't open link: %s", err->message);
-        g_printerr("jot: %s\n", msg);
-        toast(msg);
-    }
-}
-
 /* Opens the link at `it` in the browser; FALSE if there's none. */
 gboolean md_open_url_at(const GtkTextIter *it) {
     g_autofree char *url = md_url_at(it);
     if (!url)
         return FALSE;
-    g_autoptr(GtkUriLauncher) l = gtk_uri_launcher_new(url);
-    gtk_uri_launcher_launch(l, J.win, NULL, url_launched, NULL);
+    ui_open_uri(url);
     return TRUE;
 }
 

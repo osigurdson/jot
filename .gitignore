@@ -11,3 +11,8 @@
 .vscode/
 .idea/
 .DS_Store
+engine_gtk.txt
+engine_lite.txt
+engine.diff
+test_engine_gtk
+test_engine_lite

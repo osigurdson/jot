@@ -45,9 +45,6 @@ static struct {
     JotImage *hl_image;          /* image whose text matched the search: outlined + words highlighted */
     int vis_first, vis_last;     /* lines of the last visual selection, for :'<,'> */
     /* status line / command line */
-    GtkStack *stack;
-    GtkLabel *mode_label, *showcmd_label, *ocr_label, *pos_label, *cmd_prefix;
-    GtkText *cmd;
     gunichar cmd_kind; /* ':' '/' '?' */
     int search_origin;
     GPtrArray *history;
@@ -150,21 +147,16 @@ static gboolean smartcase(const char *q) {
 /* ------------------------------------------------------------------------- */
 
 static void vim_message(const char *msg, gboolean error) {
-    gtk_label_set_text(V.mode_label, msg);
-    if (error)
-        gtk_widget_add_css_class(GTK_WIDGET(V.mode_label), "error");
-    else
-        gtk_widget_remove_css_class(GTK_WIDGET(V.mode_label), "error");
+    ui_status_mode(msg, error);
     V.message_shown = TRUE;
 }
 
 static void update_status(void) {
-    if (!V.mode_label)
+    if (!ui_status_ready())
         return;
     if (!V.message_shown) {
         static const char *names[] = {"", "-- INSERT --", "-- VISUAL --", "-- VISUAL LINE --"};
-        gtk_label_set_text(V.mode_label, names[V.mode]);
-        gtk_widget_remove_css_class(GTK_WIDGET(V.mode_label), "error");
+        ui_status_mode(names[V.mode], FALSE);
     }
     GString *sc = g_string_new(NULL);
     for (const char *p = V.pending->str; *p;) {
@@ -174,13 +166,13 @@ static void update_status(void) {
         else
             g_string_append_unichar(sc, c);
     }
-    gtk_label_set_text(V.showcmd_label, sc->str);
+    ui_status_keys(sc->str);
     g_string_free(sc, TRUE);
     GtkTextIter it;
     get_cursor(&it);
     char pos[48];
     g_snprintf(pos, sizeof pos, "%d,%d", gtk_text_iter_get_line(&it) + 1, gtk_text_iter_get_line_offset(&it) + 1);
-    gtk_label_set_text(V.pos_label, pos);
+    ui_status_pos(pos);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -189,7 +181,7 @@ static void update_status(void) {
 
 static void set_mode(Mode m) {
     V.mode = m;
-    gtk_text_view_set_overwrite(J.view, m == MODE_NORMAL); /* block cursor */
+    ui_block_cursor(m == MODE_NORMAL); /* block cursor */
     update_status();
     update_image_selection(); /* the cursor selects an image in normal mode only */
 }
@@ -216,12 +208,12 @@ static void set_cursor(GtkTextIter *it) {
             gtk_text_iter_forward_char(&e); /* inclusive */
         }
         gtk_text_buffer_select_range(J.buf, fwd ? &e : &s, fwd ? &s : &e);
-        gtk_text_view_scroll_mark_onscreen(J.view, V.vcur);
+        ui_scroll_mark_onscreen(V.vcur);
     } else {
         if (V.mode == MODE_NORMAL)
             clamp_normal(it);
         gtk_text_buffer_place_cursor(J.buf, it);
-        gtk_text_view_scroll_mark_onscreen(J.view, gtk_text_buffer_get_insert(J.buf));
+        ui_scroll_mark_onscreen(gtk_text_buffer_get_insert(J.buf));
     }
     update_status();
 }
@@ -237,7 +229,7 @@ static void enter_insert(GtkTextIter *at) {
     begin_insert_group();
     gtk_text_buffer_place_cursor(J.buf, at);
     set_mode(MODE_INSERT);
-    gtk_text_view_scroll_mark_onscreen(J.view, gtk_text_buffer_get_insert(J.buf));
+    ui_scroll_mark_onscreen(gtk_text_buffer_get_insert(J.buf));
 }
 
 static void leave_insert(void) {
@@ -483,10 +475,10 @@ static void show_match(Match *m, const char *q) {
         else
             gtk_text_buffer_select_range(J.buf, &m->start, &m->end);
         V.search_hl = TRUE;
-        gtk_text_view_scroll_mark_onscreen(J.view, gtk_text_buffer_get_insert(J.buf));
+        ui_scroll_mark_onscreen(gtk_text_buffer_get_insert(J.buf));
         update_status();
     }
-    gtk_text_view_scroll_to_iter(J.view, &m->start, 0.1, FALSE, 0, 0);
+    ui_scroll_iter_onscreen(&m->start);
     if (m->img) {
         /* OCR keeps runs of spaces (indentation, columns); squeeze them for the status line */
         g_autoptr(GRegex) spaces = g_regex_new("\\s{2,}", 0, 0, NULL);
@@ -732,12 +724,8 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
     case 'H':
     case 'M':
     case 'L': {
-        GdkRectangle vis;
-        gtk_text_view_get_visible_rect(J.view, &vis);
-        GtkTextIter top, bot;
-        gtk_text_view_get_line_at_y(J.view, &top, vis.y, NULL);
-        gtk_text_view_get_line_at_y(J.view, &bot, vis.y + vis.height - 1, NULL);
-        int t = gtk_text_iter_get_line(&top), b = gtk_text_iter_get_line(&bot);
+        int t, b;
+        ui_visible_lines(&t, &b);
         int line = c == 'H' ? MIN(t + n - 1, b) : c == 'L' ? MAX(b - n + 1, t) : (t + b) / 2;
         iter_line(it, line);
         first_nonblank(it);
@@ -1123,9 +1111,8 @@ static void put_text(PutReq *pr, const char *text, gboolean linewise) {
     g_string_free(t, TRUE);
 }
 
-static void put_text_done(GObject *src, GAsyncResult *res, gpointer data) {
-    PutReq *pr = data;
-    g_autofree char *text = gdk_clipboard_read_text_finish(GDK_CLIPBOARD(src), res, NULL);
+void vim_put_text(void *request, const char *text) {
+    PutReq *pr = request;
     if (text && *text) {
         gboolean linewise = (V.reg && g_str_equal(text, V.reg)) ? V.reg_linewise : g_str_has_suffix(text, "\n");
         put_text(pr, text, linewise);
@@ -1133,10 +1120,8 @@ static void put_text_done(GObject *src, GAsyncResult *res, gpointer data) {
     g_free(pr);
 }
 
-static void put_image_done(GObject *src, GAsyncResult *res, gpointer data) {
-    PutReq *pr = data;
-    g_autoptr(GdkTexture) tex = gdk_clipboard_read_texture_finish(GDK_CLIPBOARD(src), res, NULL);
-    char *rel = tex ? save_texture(tex) : NULL;
+void vim_put_image(void *request, char *rel) {
+    PutReq *pr = request;
     if (rel) {
         if (pr->replace_s >= 0) {
             Range r = {pr->replace_s, pr->replace_e, pr->replace_linewise};
@@ -1168,17 +1153,12 @@ static void put_image_done(GObject *src, GAsyncResult *res, gpointer data) {
     g_free(pr);
 }
 
+void vim_put_none(void *request) {
+    g_free(request);
+    vim_message("E353: Nothing in register +", TRUE);
+}
+
 static void put(gboolean after, int count) {
-    GdkClipboard *cb = gtk_widget_get_clipboard(GTK_WIDGET(J.view));
-    GdkContentFormats *f = gdk_clipboard_get_formats(cb);
-    gboolean has_text = gdk_content_formats_contain_gtype(f, G_TYPE_STRING);
-    gboolean has_image = gdk_content_formats_contain_gtype(f, GDK_TYPE_TEXTURE);
-    gsize n = 0;
-    const char *const *mimes = gdk_content_formats_get_mime_types(f, &n);
-    for (gsize i = 0; i < n; i++) {
-        has_text |= g_str_has_prefix(mimes[i], "text/plain");
-        has_image |= g_str_has_prefix(mimes[i], "image/");
-    }
     PutReq *pr = g_new0(PutReq, 1);
     pr->after = after;
     pr->count = count;
@@ -1190,14 +1170,7 @@ static void put(gboolean after, int count) {
         pr->replace_e = r.e;
         pr->replace_linewise = r.linewise;
     }
-    if (has_text) {
-        gdk_clipboard_read_text_async(cb, NULL, put_text_done, pr);
-    } else if (has_image) {
-        gdk_clipboard_read_texture_async(cb, NULL, put_image_done, pr);
-    } else {
-        g_free(pr);
-        vim_message("E353: Nothing in register +", TRUE);
-    }
+    ui_clipboard_read(pr);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1262,17 +1235,13 @@ static gboolean join_lines(int line, int joins) {
 
 /* Ctrl+D/U (half page) and Ctrl+F/B (page): move the cursor and scroll with it. */
 static void page_move(int dir, gboolean half, int count) {
-    GdkRectangle vis;
-    gtk_text_view_get_visible_rect(J.view, &vis);
-    GtkTextIter top, bot, cur;
-    gtk_text_view_get_line_at_y(J.view, &top, vis.y, NULL);
-    gtk_text_view_get_line_at_y(J.view, &bot, vis.y + vis.height - 1, NULL);
-    int page = MAX(1, gtk_text_iter_get_line(&bot) - gtk_text_iter_get_line(&top));
+    int top, bot;
+    ui_visible_lines(&top, &bot);
+    int page = MAX(1, bot - top);
     int lines = (half ? MAX(1, page / 2) : MAX(1, page - 2)) * MAX(count, 1);
+    GtkTextIter cur;
     get_cursor(&cur);
-    int y, h;
-    gtk_text_view_get_line_yrange(J.view, &cur, &y, &h);
-    double rel = CLAMP((double)(y - vis.y) / MAX(vis.height, 1), 0.0, 1.0);
+    double rel = ui_iter_screen_pos(&cur);
     if (V.want_col < 0)
         V.want_col = gtk_text_iter_get_line_offset(&cur);
     int line = CLAMP(gtk_text_iter_get_line(&cur) + dir * lines, 0, line_count() - 1);
@@ -1280,17 +1249,13 @@ static void page_move(int dir, gboolean half, int count) {
     iter_line_col(&it, line, V.want_col);
     set_cursor(&it);
     GtkTextMark *m = is_visual() ? V.vcur : gtk_text_buffer_get_insert(J.buf);
-    gtk_text_view_scroll_to_mark(J.view, m, 0, TRUE, 0, half ? rel : (dir > 0 ? 0.0 : 1.0));
+    ui_scroll_mark_to(m, half ? rel : (dir > 0 ? 0.0 : 1.0));
 }
 
 static void scroll_lines(int dir, int count) {
-    GtkAdjustment *adj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(J.view));
     GtkTextIter cur;
     get_cursor(&cur);
-    int y, h;
-    gtk_text_view_get_line_yrange(J.view, &cur, &y, &h);
-    double step = MAX(h, 16) * MAX(count, 1);
-    gtk_adjustment_set_value(adj, gtk_adjustment_get_value(adj) + dir * step);
+    ui_scroll_lines(&cur, dir, count);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1301,24 +1266,15 @@ static void cmdline_open(gunichar kind, const char *prefill) {
     V.cmd_kind = kind;
     char pre[8] = {0};
     g_unichar_to_utf8(kind, pre);
-    gtk_label_set_text(V.cmd_prefix, pre);
-    gtk_editable_set_text(GTK_EDITABLE(V.cmd), prefill ? prefill : "");
     GtkTextIter it;
     get_cursor(&it);
     V.search_origin = offset_of(&it);
     V.hist_pos = V.history->len;
-    gtk_stack_set_visible_child_name(V.stack, "cmd");
-    gtk_widget_grab_focus(GTK_WIDGET(V.cmd));
-    gtk_editable_set_position(GTK_EDITABLE(V.cmd), -1);
-}
-
-static gboolean cmdline_is_open(void) {
-    return g_str_equal(gtk_stack_get_visible_child_name(V.stack), "cmd");
+    ui_cmd_open(pre, prefill ? prefill : "");
 }
 
 static void cmdline_close(void) {
-    gtk_stack_set_visible_child_name(V.stack, "status");
-    gtk_widget_grab_focus(GTK_WIDGET(J.view));
+    ui_cmd_close();
     update_status();
 }
 
@@ -1339,11 +1295,10 @@ static void cmdline_cancel(void) {
 }
 
 /* Incremental search: highlight the match as the pattern is typed. */
-static void on_cmd_changed(GtkEditable *e, gpointer unused) {
-    (void)unused;
-    if (V.cmd_kind == ':' || !cmdline_is_open())
+void vim_cmd_changed(void) {
+    if (V.cmd_kind == ':' || !ui_cmd_is_open())
         return;
-    const char *q = gtk_editable_get_text(e);
+    const char *q = ui_cmd_text();
     GtkTextIter from;
     iter_at(&from, V.search_origin);
     Match m = {0};
@@ -1355,7 +1310,7 @@ static void on_cmd_changed(GtkEditable *e, gpointer unused) {
             mark_image(m.img, &m.start, q);
         else
             gtk_text_buffer_select_range(J.buf, &m.start, &m.end);
-        gtk_text_view_scroll_to_iter(J.view, &m.start, 0.1, FALSE, 0, 0);
+        ui_scroll_iter_onscreen(&m.start);
         g_free(m.line);
     } else {
         restore_origin();
@@ -1374,9 +1329,8 @@ static void search_commit(const char *q, gboolean fwd) {
 
 static void ex_command(const char *raw);
 
-static void on_cmd_activate(GtkText *t, gpointer unused) {
-    (void)unused;
-    g_autofree char *text = g_strdup(gtk_editable_get_text(GTK_EDITABLE(t)));
+void vim_cmd_activate(void) {
+    g_autofree char *text = g_strdup(ui_cmd_text());
     gunichar kind = V.cmd_kind;
     if (*text) {
         char pre[8] = {0};
@@ -1397,32 +1351,29 @@ static void history_step(int dir) {
     for (int i = (int)V.hist_pos + dir; i >= 0 && i <= (int)V.history->len; i += dir) {
         if (i == (int)V.history->len) {
             V.hist_pos = i;
-            gtk_editable_set_text(GTK_EDITABLE(V.cmd), "");
+            ui_cmd_set_text("");
             return;
         }
         const char *h = V.history->pdata[i];
         if (g_str_has_prefix(h, pre)) {
             V.hist_pos = i;
-            gtk_editable_set_text(GTK_EDITABLE(V.cmd), h + strlen(pre));
-            gtk_editable_set_position(GTK_EDITABLE(V.cmd), -1);
+            ui_cmd_set_text(h + strlen(pre));
             return;
         }
     }
 }
 
-static gboolean on_cmd_key(GtkEventControllerKey *c, guint keyval, guint code, GdkModifierType mods, gpointer unused) {
-    (void)c, (void)code, (void)unused;
-    gboolean ctrl = (mods & GDK_CONTROL_MASK) != 0;
-    if (keyval == GDK_KEY_Escape || (ctrl && (keyval == GDK_KEY_bracketleft || keyval == GDK_KEY_c))) {
+gboolean vim_cmd_key(JotKey key, gunichar ch, gboolean ctrl) {
+    if (key == JK_ESC || (ctrl && (ch == '[' || ch == 'c'))) {
         cmdline_cancel();
         return TRUE;
     }
-    if (keyval == GDK_KEY_BackSpace && !*gtk_editable_get_text(GTK_EDITABLE(V.cmd))) {
+    if (key == JK_BACKSPACE && !*ui_cmd_text()) {
         cmdline_cancel();
         return TRUE;
     }
-    if (keyval == GDK_KEY_Up || keyval == GDK_KEY_Down) {
-        history_step(keyval == GDK_KEY_Up ? -1 : 1);
+    if (key == JK_UP || key == JK_DOWN) {
+        history_step(key == JK_UP ? -1 : 1);
         return TRUE;
     }
     return FALSE;
@@ -1677,12 +1628,10 @@ static void ex_command(const char *raw) {
         vim_message(msg, FALSE);
     } else if (is_q) {
         save();
-        gtk_window_close(J.win);
+        ui_quit();
     } else if (g_str_equal(p, "Ex") || g_str_equal(p, "Explore") || g_str_equal(p, "E")) {
         /* vim's file browser; here, the notes folder in the system file manager */
-        g_autoptr(GFile) f = g_file_new_for_path(notes_dir);
-        g_autoptr(GtkFileLauncher) l = gtk_file_launcher_new(f);
-        gtk_file_launcher_launch(l, J.win, NULL, NULL, NULL);
+        ui_open_folder(notes_dir);
     } else if (g_str_equal(p, "noh") || g_str_equal(p, "nohlsearch")) {
         cursor_iter(&it);
         gtk_text_buffer_place_cursor(J.buf, &it);
@@ -2039,8 +1988,7 @@ static Res vim_exec(const char *keys) {
             cmdline_open(':', count ? (count == 1 ? "." : NULL) : NULL);
             if (count > 1) {
                 g_autofree char *pre = g_strdup_printf(".,.+%d", count - 1);
-                gtk_editable_set_text(GTK_EDITABLE(V.cmd), pre);
-                gtk_editable_set_position(GTK_EDITABLE(V.cmd), -1);
+                ui_cmd_set_text(pre);
             }
             return R_DONE;
         case '.':
@@ -2091,7 +2039,7 @@ static Res vim_exec(const char *keys) {
         if (align < 0)
             return R_BAD;
         GtkTextMark *m = vis ? V.vcur : gtk_text_buffer_get_insert(J.buf);
-        gtk_text_view_scroll_to_mark(J.view, m, 0, TRUE, 0, align);
+        ui_scroll_mark_to(m, align);
         return R_DONE;
     }
     case CTRL('d'):
@@ -2180,7 +2128,7 @@ static void vim_input(gunichar c) {
     if (r != R_MORE)
         g_string_truncate(V.pending, 0);
     if (r == R_BAD)
-        gtk_widget_error_bell(GTK_WIDGET(J.view));
+        ui_bell();
     update_status();
 }
 
@@ -2201,51 +2149,46 @@ static void insert_delete_back(gboolean word) {
     gtk_text_buffer_delete(J.buf, &s, &cur);
 }
 
-/* Called first from jot.c's key handler. TRUE = handled (in normal/visual mode that's every key
- * that would otherwise type or edit). */
-gboolean vim_key(guint keyval, GdkModifierType mods) {
-    mods &= gtk_accelerator_get_default_mod_mask();
-    gboolean ctrl = (mods & GDK_CONTROL_MASK) != 0;
-    if (mods & (GDK_ALT_MASK | GDK_SUPER_MASK))
-        return FALSE;
+/* TRUE = handled (in normal/visual mode that's every key that would otherwise type or edit). */
+gboolean vim_key(JotKey key, gunichar ch, gboolean ctrl) {
     if (V.mode == MODE_INSERT) {
-        if (keyval == GDK_KEY_Escape || (ctrl && keyval == GDK_KEY_bracketleft)) {
+        if (key == JK_ESC || (ctrl && ch == '[')) {
             leave_insert();
             return TRUE;
         }
-        if (ctrl && (keyval == GDK_KEY_w || keyval == GDK_KEY_u)) {
-            insert_delete_back(keyval == GDK_KEY_w);
+        if (ctrl && (ch == 'w' || ch == 'u')) {
+            insert_delete_back(ch == 'w');
             return TRUE;
         }
         return FALSE;
     }
     gunichar c = 0;
-    switch (keyval) {
-    case GDK_KEY_Escape: c = K_ESC; break;
-    case GDK_KEY_Return: case GDK_KEY_KP_Enter: c = K_CR; break;
-    case GDK_KEY_BackSpace: c = K_BS; break;
-    case GDK_KEY_Tab: case GDK_KEY_ISO_Left_Tab: c = K_TAB; break;
-    case GDK_KEY_Left: case GDK_KEY_KP_Left: c = 'h'; break;
-    case GDK_KEY_Right: case GDK_KEY_KP_Right: c = 'l'; break;
-    case GDK_KEY_Up: case GDK_KEY_KP_Up: c = 'k'; break;
-    case GDK_KEY_Down: case GDK_KEY_KP_Down: c = 'j'; break;
-    case GDK_KEY_Home: case GDK_KEY_KP_Home: c = '0'; break;
-    case GDK_KEY_End: case GDK_KEY_KP_End: c = '$'; break;
-    case GDK_KEY_Page_Down: case GDK_KEY_KP_Page_Down: c = CTRL('f'); break;
-    case GDK_KEY_Page_Up: case GDK_KEY_KP_Page_Up: c = CTRL('b'); break;
-    case GDK_KEY_Delete: case GDK_KEY_KP_Delete: c = 'x'; break;
-    case GDK_KEY_Insert: c = 'i'; break;
+    switch (key) {
+    case JK_ESC: c = K_ESC; break;
+    case JK_RETURN: c = K_CR; break;
+    case JK_BACKSPACE: c = K_BS; break;
+    case JK_TAB: c = K_TAB; break;
+    case JK_LEFT: c = 'h'; break;
+    case JK_RIGHT: c = 'l'; break;
+    case JK_UP: c = 'k'; break;
+    case JK_DOWN: c = 'j'; break;
+    case JK_HOME: c = '0'; break;
+    case JK_END: c = '$'; break;
+    case JK_PAGE_DOWN: c = CTRL('f'); break;
+    case JK_PAGE_UP: c = CTRL('b'); break;
+    case JK_DELETE: c = 'x'; break;
+    case JK_INSERT: c = 'i'; break;
+    case JK_CHAR: case JK_NONE: break;
     }
     if (!c && ctrl) {
-        guint k = gdk_keyval_to_lower(keyval);
-        if (k == GDK_KEY_bracketleft)
+        if (ch == '[')
             c = K_ESC;
-        else if (k >= GDK_KEY_a && k <= GDK_KEY_z && strchr("bdefhnpruvy", (int)k))
-            c = CTRL(k);
+        else if (ch >= 'a' && ch <= 'z' && strchr("bdefhnpruvy", (int)ch))
+            c = CTRL(ch);
         else
-            return FALSE; /* Ctrl+C, Ctrl+S, Ctrl+Q, zoom... go to GTK and jot's shortcuts */
+            return FALSE; /* Ctrl+C, Ctrl+S, Ctrl+Q, zoom... go to the platform's shortcuts */
     } else if (!c) {
-        c = gdk_keyval_to_unicode(keyval);
+        c = ch;
         if (!c)
             return FALSE; /* modifiers, function keys */
     }
@@ -2263,67 +2206,19 @@ static void on_vim_mark_set(GtkTextBuffer *buf, GtkTextIter *it, GtkTextMark *ma
         update_status();
 }
 
-/* The bottom bar: mode / messages on the left (or the : / ? command line), pending keys and
- * line,col on the right. */
-GtkWidget *vim_build_bar(void) {
-    GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 16);
-    gtk_widget_add_css_class(bar, "jot-statusline");
-    gtk_widget_add_css_class(bar, "monospace"); /* the system monospace font, like the editor */
-
-    V.stack = GTK_STACK(gtk_stack_new());
-    gtk_widget_set_hexpand(GTK_WIDGET(V.stack), TRUE);
-    V.mode_label = GTK_LABEL(gtk_label_new(NULL));
-    gtk_label_set_xalign(V.mode_label, 0);
-    gtk_label_set_ellipsize(V.mode_label, PANGO_ELLIPSIZE_END);
-    gtk_stack_add_named(V.stack, GTK_WIDGET(V.mode_label), "status");
-
-    GtkWidget *cmdbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    V.cmd_prefix = GTK_LABEL(gtk_label_new(":"));
-    V.cmd = GTK_TEXT(gtk_text_new());
-    gtk_widget_set_hexpand(GTK_WIDGET(V.cmd), TRUE);
-    g_signal_connect(V.cmd, "activate", G_CALLBACK(on_cmd_activate), NULL);
-    g_signal_connect(V.cmd, "changed", G_CALLBACK(on_cmd_changed), NULL);
-    GtkEventController *keys = gtk_event_controller_key_new();
-    gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
-    g_signal_connect(keys, "key-pressed", G_CALLBACK(on_cmd_key), NULL);
-    gtk_widget_add_controller(GTK_WIDGET(V.cmd), keys);
-    gtk_box_append(GTK_BOX(cmdbox), GTK_WIDGET(V.cmd_prefix));
-    gtk_box_append(GTK_BOX(cmdbox), GTK_WIDGET(V.cmd));
-    gtk_stack_add_named(V.stack, cmdbox, "cmd");
-    gtk_stack_set_visible_child_name(V.stack, "status");
-
-    V.showcmd_label = GTK_LABEL(gtk_label_new(NULL));
-    gtk_widget_add_css_class(GTK_WIDGET(V.showcmd_label), "dim-label");
-    V.pos_label = GTK_LABEL(gtk_label_new(NULL));
-    gtk_label_set_width_chars(V.pos_label, 10);
-    gtk_label_set_xalign(V.pos_label, 1);
-
-    gtk_box_append(GTK_BOX(bar), GTK_WIDGET(V.stack));
-    gtk_box_append(GTK_BOX(bar), GTK_WIDGET(V.showcmd_label));
-    V.ocr_label = GTK_LABEL(gtk_label_new(NULL));
-    gtk_widget_add_css_class(GTK_WIDGET(V.ocr_label), "dim-label");
-    gtk_widget_set_visible(GTK_WIDGET(V.ocr_label), FALSE);
-    gtk_box_append(GTK_BOX(bar), GTK_WIDGET(V.ocr_label));
-    gtk_box_append(GTK_BOX(bar), GTK_WIDGET(V.pos_label));
-    return bar;
-}
-
 /* Shows OCR progress in the status line; when a read finishes, re-runs a search it may affect:
  * one being typed at the prompt, or one that just failed (unless a key has been pressed since). */
 void vim_ocr_changed(gboolean finished) {
-    if (!V.ocr_label)
+    if (!ui_status_ready())
         return;
     guint n = ocr_pending_count();
-    if (n) {
-        g_autofree char *text = n == 1 ? g_strdup("indexing image…") : g_strdup_printf("indexing %u images…", n);
-        gtk_label_set_text(V.ocr_label, text);
-    }
-    gtk_widget_set_visible(GTK_WIDGET(V.ocr_label), n > 0);
+    g_autofree char *text = !n ? NULL : n == 1 ? g_strdup("indexing image…") : g_strdup_printf("indexing %u images…", n);
+    ui_status_ocr(text);
     if (!finished)
         return;
-    if (cmdline_is_open()) {
+    if (ui_cmd_is_open()) {
         if (V.cmd_kind != ':')
-            on_cmd_changed(GTK_EDITABLE(V.cmd), NULL);
+            vim_cmd_changed();
     } else if (V.search_retry) {
         V.search_retry = FALSE;
         search_jump(V.search_retry_fwd, 1);

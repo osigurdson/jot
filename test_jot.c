@@ -1,8 +1,10 @@
 /* Headless UI tests for jot. Run with `make check` (uses GTK's Broadway backend). */
 #define JOT_NO_MAIN
 #include "jot.c"
+#include "core.c"
 #include "md.c"
 #include "vim.c"
+#include "ui_gtk.c"
 #include <pango/pangocairo.h>
 
 static int failures;
@@ -114,14 +116,14 @@ static void feed(const char *keys) {
         gunichar c = g_utf8_get_char(p);
         char b[8] = {0};
         g_unichar_to_utf8(c, b);
-        if (cmdline_is_open()) {
+        if (ui_cmd_is_open()) {
             if (c == '\r') {
-                g_signal_emit_by_name(V.cmd, "activate");
+                g_signal_emit_by_name(U.cmd, "activate");
             } else if (c == K_ESC) {
                 cmdline_cancel();
             } else {
-                g_autofree char *t = g_strconcat(gtk_editable_get_text(GTK_EDITABLE(V.cmd)), b, NULL);
-                gtk_editable_set_text(GTK_EDITABLE(V.cmd), t);
+                g_autofree char *t = g_strconcat(gtk_editable_get_text(GTK_EDITABLE(U.cmd)), b, NULL);
+                gtk_editable_set_text(GTK_EDITABLE(U.cmd), t);
             }
         } else if (V.mode == MODE_INSERT && c != K_ESC) {
             if (c == '\r')
@@ -345,14 +347,14 @@ static gboolean step(gpointer unused) {
         feed("/flaky\r");
         t = selected_text();
         CHECK(g_str_equal(t, "FLAKY") && selection_line() == 0, "/flaky finds FLAKY (lowercase = ignore case)");
-        CHECK(!gtk_widget_has_focus(GTK_WIDGET(V.cmd)) && gtk_widget_has_focus(GTK_WIDGET(J.view)),
+        CHECK(!gtk_widget_has_focus(GTK_WIDGET(U.cmd)) && gtk_widget_has_focus(GTK_WIDGET(J.view)),
               "Enter closes the prompt, focus back in editor");
         feed("n");
         CHECK(cur_line() == 2, "n -> line 2 (got %d)", cur_line());
         feed("n");
         feed("n");
         CHECK(cur_line() == 0, "n wraps to line 0 (got %d)", cur_line());
-        CHECK(g_str_has_prefix(gtk_label_get_text(V.mode_label), "search hit BOTTOM"), "wrap message shown");
+        CHECK(g_str_has_prefix(gtk_label_get_text(U.mode_label), "search hit BOTTOM"), "wrap message shown");
         feed("N");
         CHECK(cur_line() == 3, "N wraps back to line 3 (got %d)", cur_line());
         feed("/FLAKY\r");
@@ -361,8 +363,8 @@ static gboolean step(gpointer unused) {
         feed("?gamma\r");
         CHECK_POS(2, 6, "?gamma searches backward");
         feed("/zzz\r");
-        CHECK(gtk_widget_has_css_class(GTK_WIDGET(V.mode_label), "error") &&
-                  strstr(gtk_label_get_text(V.mode_label), "E486"),
+        CHECK(gtk_widget_has_css_class(GTK_WIDGET(U.mode_label), "error") &&
+                  strstr(gtk_label_get_text(U.mode_label), "E486"),
               "no match -> E486 error");
         CHECK_POS(2, 6, "failed search leaves cursor");
         feed("/bet");
@@ -463,8 +465,8 @@ static gboolean step(gpointer unused) {
         JotImage *sel = V.hl_image;
         CHECK(sel && sel->selected && !gtk_text_buffer_get_has_selection(J.buf),
               "/ finds text inside an image and outlines it (without a selection tint)");
-        CHECK(g_str_has_prefix(gtk_label_get_text(V.mode_label), "in image: Segmentation"),
-              "status line shows the matching image line: %s", gtk_label_get_text(V.mode_label));
+        CHECK(g_str_has_prefix(gtk_label_get_text(U.mode_label), "in image: Segmentation"),
+              "status line shows the matching image line: %s", gtk_label_get_text(U.mode_label));
         {
             g_autofree char *tsv = ocr_sidecar_ext(ocr_rel, ".tsv");
             CHECK(g_file_test(tsv, G_FILE_TEST_EXISTS), "word positions saved in %s.tsv", ocr_rel);
@@ -725,7 +727,7 @@ static gboolean step(gpointer unused) {
         page_at("one two", 0, 0);
         feed("ve");
         CHECK(V.mode == MODE_VISUAL, "v enters visual mode");
-        CHECK(g_str_equal(gtk_label_get_text(V.mode_label), "-- VISUAL --"), "status shows -- VISUAL --");
+        CHECK(g_str_equal(gtk_label_get_text(U.mode_label), "-- VISUAL --"), "status shows -- VISUAL --");
         t = selected_text();
         CHECK(g_str_equal(t, "one"), "v e selects inclusively: %s", t);
         feed("\x1b");
@@ -735,8 +737,8 @@ static gboolean step(gpointer unused) {
         page_at("foo one\nfoo two foo\nthree", 0, 0);
         feed(":%s/foo/bar/g\r");
         CHECK_PAGE("bar one\nbar two bar\nthree", ":%%s/foo/bar/g");
-        CHECK(strstr(gtk_label_get_text(V.mode_label), "3 substitutions on 2 lines") != NULL,
-              "substitute reports: %s", gtk_label_get_text(V.mode_label));
+        CHECK(strstr(gtk_label_get_text(U.mode_label), "3 substitutions on 2 lines") != NULL,
+              "substitute reports: %s", gtk_label_get_text(U.mode_label));
         feed(":s/bar/baz/\r");
         CHECK_PAGE("bar one\nbaz two bar\nthree", ":s on the current (last changed) line, first match only");
         feed(":%s/\\(t\\w\\+\\)/<\\1>/\r");
@@ -750,32 +752,32 @@ static gboolean step(gpointer unused) {
         feed(":set nu\r");
         CHECK(J.line_numbers && gtk_widget_is_ancestor(J.gutter, GTK_WIDGET(J.view)), ":set nu shows them");
         feed(":w\r");
-        CHECK(strstr(gtk_label_get_text(V.mode_label), "written") != NULL, ":w reports written: %s",
-              gtk_label_get_text(V.mode_label));
+        CHECK(strstr(gtk_label_get_text(U.mode_label), "written") != NULL, ":w reports written: %s",
+              gtk_label_get_text(U.mode_label));
         feed(":bogus\r");
-        CHECK(strstr(gtk_label_get_text(V.mode_label), "E492") != NULL, "unknown command -> E492");
+        CHECK(strstr(gtk_label_get_text(U.mode_label), "E492") != NULL, "unknown command -> E492");
         feed(":2,3d\r");
         CHECK_PAGE("bar one", ":2,3d deletes lines");
 
         /* ---- keys ---- */
         page_at("abc", 0, 0);
-        CHECK(vim_key(GDK_KEY_q, 0) && vim_key(GDK_KEY_z, 0), "normal mode swallows printable keys");
+        CHECK(ui_key(GDK_KEY_q, 0) && ui_key(GDK_KEY_z, 0), "normal mode swallows printable keys");
         g_string_truncate(V.pending, 0);
         CHECK_PAGE("abc", "...without inserting them");
-        vim_key(GDK_KEY_Right, 0);
+        ui_key(GDK_KEY_Right, 0);
         CHECK_POS(0, 1, "arrow keys move");
-        vim_key(GDK_KEY_i, 0);
-        CHECK(V.mode == MODE_INSERT && g_str_equal(gtk_label_get_text(V.mode_label), "-- INSERT --"),
+        ui_key(GDK_KEY_i, 0);
+        CHECK(V.mode == MODE_INSERT && g_str_equal(gtk_label_get_text(U.mode_label), "-- INSERT --"),
               "i -> insert mode, status says so");
-        CHECK(!vim_key(GDK_KEY_q, 0), "insert mode lets keys through to the text view");
+        CHECK(!ui_key(GDK_KEY_q, 0), "insert mode lets keys through to the text view");
         CHECK(!gtk_text_view_get_overwrite(J.view), "insert mode: line cursor");
-        vim_key(GDK_KEY_Escape, 0);
+        ui_key(GDK_KEY_Escape, 0);
         CHECK(V.mode == MODE_NORMAL && gtk_text_view_get_overwrite(J.view), "Esc -> normal mode, block cursor");
-        CHECK(!vim_key(GDK_KEY_c, GDK_CONTROL_MASK), "Ctrl+C is left to GTK (copy)");
-        CHECK(g_str_equal(gtk_label_get_text(V.pos_label), "1,1"), "status shows line,col: %s",
-              gtk_label_get_text(V.pos_label));
+        CHECK(!ui_key(GDK_KEY_c, GDK_CONTROL_MASK), "Ctrl+C is left to GTK (copy)");
+        CHECK(g_str_equal(gtk_label_get_text(U.pos_label), "1,1"), "status shows line,col: %s",
+              gtk_label_get_text(U.pos_label));
         feed("2d");
-        CHECK(g_str_equal(gtk_label_get_text(V.showcmd_label), "2d"), "pending keys are shown");
+        CHECK(g_str_equal(gtk_label_get_text(U.showcmd_label), "2d"), "pending keys are shown");
         feed("\x1b");
 
         /* ---- images: the cursor selects them ---- */
@@ -977,7 +979,7 @@ static gboolean step(gpointer unused) {
         g_file_set_contents(tesseract_path, script, -1, NULL);
         g_chmod(tesseract_path, 0755);
         page_at("", 0, 0);
-        CHECK(!gtk_widget_get_visible(GTK_WIDGET(V.ocr_label)), "nothing indexing: no status");
+        CHECK(!gtk_widget_get_visible(GTK_WIDGET(U.ocr_label)), "nothing indexing: no status");
         g_autoptr(GdkTexture) tex = make_text_texture("Quokka migration checklist");
         g_autoptr(GBytes) png = gdk_texture_save_to_png_bytes(tex);
         set_clipboard_bytes("image/png", png);
@@ -990,12 +992,12 @@ static gboolean step(gpointer unused) {
             break;
         }
         waited = 0;
-        CHECK(gtk_widget_get_visible(GTK_WIDGET(V.ocr_label)) &&
-                  g_str_equal(gtk_label_get_text(V.ocr_label), "indexing image…"),
+        CHECK(gtk_widget_get_visible(GTK_WIDGET(U.ocr_label)) &&
+                  g_str_equal(gtk_label_get_text(U.ocr_label), "indexing image…"),
               "status line shows indexing while a read runs");
         feed("/quokka\r");
-        CHECK(strstr(gtk_label_get_text(V.mode_label), "still indexing 1 image") != NULL,
-              "a miss says images are still being read: %s", gtk_label_get_text(V.mode_label));
+        CHECK(strstr(gtk_label_get_text(U.mode_label), "still indexing 1 image") != NULL,
+              "a miss says images are still being read: %s", gtk_label_get_text(U.mode_label));
         break;
     case 27: {
         if (ocr_pending_count() && waited++ < 40) {
@@ -1003,7 +1005,7 @@ static gboolean step(gpointer unused) {
             break;
         }
         waited = 0;
-        CHECK(!gtk_widget_get_visible(GTK_WIDGET(V.ocr_label)), "indexing status goes away when done");
+        CHECK(!gtk_widget_get_visible(GTK_WIDGET(U.ocr_label)), "indexing status goes away when done");
         CHECK(V.hl_image != NULL, "the failed search finds its match when the read finishes");
         /* a search being typed at the prompt updates by itself */
         page_at("", 0, 0);
@@ -1027,7 +1029,7 @@ static gboolean step(gpointer unused) {
             break;
         }
         waited = 0;
-        CHECK(V.hl_image != NULL && cmdline_is_open(), "an open / prompt picks up the match when the read finishes");
+        CHECK(V.hl_image != NULL && ui_cmd_is_open(), "an open / prompt picks up the match when the read finishes");
         feed("\x1b");
         /* pressing a key cancels the retry: a late result mustn't move the cursor */
         page_at("top\nbottom", 0, 0);
