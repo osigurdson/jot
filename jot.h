@@ -113,6 +113,8 @@ void save(void);
 void load_page(void);
 guint ocr_pending_count(void); /* images queued for, or in, OCR */
 
+extern const char jot_agents_md[];
+
 /* Editing, view */
 void indent_range(int first, int last, int direction);
 void edit_type(const char *text);
@@ -151,6 +153,9 @@ int md_heading_line(int line, int dir);
 /* ------------------------------------------------------------------------- */
 
 void vim_init(void);
+void vim_show_error(const char *msg);
+void vim_move_cursor(JotIter *it);      /* a click */
+void get_vim_cursor(JotIter *it);       /* the cursor, or the moving end of a selection */
 gboolean vim_image_cursor_mode(void);
 void vim_ocr_changed(gboolean finished); /* the OCR queue changed; finished = a read completed */
 

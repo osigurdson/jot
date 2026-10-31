@@ -56,6 +56,7 @@ char *jb_get_slice(JotBuf *b, const JotIter *s, const JotIter *e, gboolean hidde
 
 int jb_get_char_count(JotBuf *b);
 int jb_get_line_count(JotBuf *b);
+int jb_line_len(JotBuf *b, int line); /* characters, without the newline */
 void jb_get_start_iter(JotBuf *b, JotIter *it);
 void jb_get_end_iter(JotBuf *b, JotIter *it);
 void jb_get_bounds(JotBuf *b, JotIter *s, JotIter *e);

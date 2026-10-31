@@ -151,6 +151,10 @@ static void vim_message(const char *msg, gboolean error) {
     V.message_shown = TRUE;
 }
 
+void vim_show_error(const char *msg) {
+    vim_message(msg, TRUE);
+}
+
 static void update_status(void) {
     if (!ui_status_ready())
         return;
@@ -216,6 +220,14 @@ static void set_cursor(JotIter *it) {
         ui_scroll_mark_onscreen(jb_get_insert(J.buf));
     }
     update_status();
+}
+
+void vim_move_cursor(JotIter *it) {
+    set_cursor(it);
+}
+
+void get_vim_cursor(JotIter *it) {
+    get_cursor(it);
 }
 
 static void begin_insert_group(void) {

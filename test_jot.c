@@ -961,7 +961,7 @@ static gboolean step(gpointer unused) {
         g_autofree char *ctext = NULL;
         g_file_get_contents(claude, &ctext, NULL, NULL);
         CHECK(g_file_test(agents, G_FILE_TEST_IS_REGULAR), "a new page gets AGENTS.md");
-        CHECK(link && g_str_equal(link, "AGENTS.md") && ctext && g_str_equal(ctext, agents_md),
+        CHECK(link && g_str_equal(link, "AGENTS.md") && ctext && g_str_equal(ctext, jot_agents_md),
               "...and CLAUDE.md, a symlink to it");
         g_file_set_contents(agents, "my own notes for agents\n", -1, NULL);
         write_agent_files();

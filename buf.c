@@ -508,6 +508,14 @@ int jb_get_line_count(JotBuf *b) {
     return b->n_lines;
 }
 
+int jb_line_len(JotBuf *b, int line) {
+    if (line < 0 || line >= b->n_lines)
+        return 0;
+    if (line + 1 < b->n_lines)
+        return b->ls[line + 1] - b->ls[line] - 1;
+    return count(b) - b->ls[line];
+}
+
 void jb_get_start_iter(JotBuf *b, JotIter *it) {
     *it = (JotIter){b, 0};
 }

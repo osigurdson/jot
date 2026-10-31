@@ -1416,48 +1416,16 @@ static char *app_id_for(const char *dir) {
     return g_strdup_printf("%s.page_%.16s", APP_ID, hash);
 }
 
-static const char agents_md[] =
-    "# jot page\n"
-    "\n"
-    "This folder is one page of **jot**, a small vim-style scratchpad: quick, disorganized notes and\n"
-    "screenshots taken while working. It isn't meant to be tidy and isn't where finished notes live.\n"
-    "The useful things to do with it are help the user understand what they were doing (reconstruct\n"
-    "the thread, explain an error in a screenshot, connect related bits) and distill it into something\n"
-    "else when asked (a summary, a doc, an issue, a commit message), written outside `jot.md` or just\n"
-    "given in chat. Don't clean up, restructure or \"improve\" `jot.md` itself.\n"
-    "\n"
-    "## Layout\n"
-    "\n"
-    "- `jot.md`: the notes, as one running page of plain text (light Markdown at most); newest\n"
-    "  notes are usually at the bottom.\n"
-    "- `![](assets/<name>.png)` lines in `jot.md` are pasted screenshots, each on its own line.\n"
-    "- `assets/<name>.png.txt`: OCR text of that screenshot (Tesseract). Read this first; it's much\n"
-    "  cheaper than opening the image. Open the PNG only when the text isn't enough (layout,\n"
-    "  diagrams, UI state, or garbled OCR). OCR is imperfect: quotes/backticks and small text are\n"
-    "  often wrong.\n"
-    "- `assets/<name>.png.tsv`: word positions jot uses for highlighting. Ignore it.\n"
-    "- Screenshot filenames start with the time they were pasted (`YYYYMMDD-HHMMSS`), a good clue\n"
-    "  to when a note was written. `## YYYY-MM-DD` headings, if present, mark days.\n"
-    "\n"
-    "## Editing\n"
-    "\n"
-    "Default to reading and answering; put anything you produce in chat or a new file. Only edit\n"
-    "`jot.md` when explicitly asked, and then:\n"
-    "- Append rather than reorganize, and keep the existing plain style.\n"
-    "- Images must stay as `![](assets/<file>)` lines on their own line, or jot won't show them.\n"
-    "- jot may be open with unsaved typing and could overwrite your edit. Tell the user to switch to\n"
-    "  the jot window afterwards (it reloads the file on focus if it has no unsaved changes).\n";
-
 /* A new page gets AGENTS.md (read by Codex and other agents) and CLAUDE.md, a symlink to it (read
  * by Claude Code): one text, both tools. Existing files are never touched. */
 static void write_agent_files(void) {
     g_autofree char *agents = g_build_filename(notes_dir, "AGENTS.md", NULL);
     g_autofree char *claude = g_build_filename(notes_dir, "CLAUDE.md", NULL);
     if (!g_file_test(agents, G_FILE_TEST_EXISTS))
-        g_file_set_contents(agents, agents_md, -1, NULL);
+        g_file_set_contents(agents, jot_agents_md, -1, NULL);
     if (!g_file_test(claude, G_FILE_TEST_EXISTS) && !g_file_test(claude, G_FILE_TEST_IS_SYMLINK) &&
         symlink("AGENTS.md", claude) != 0)
-        g_file_set_contents(claude, agents_md, -1, NULL); /* no symlinks here: a copy */
+        g_file_set_contents(claude, jot_agents_md, -1, NULL); /* no symlinks here: a copy */
 }
 
 static void init_paths(const char *arg) {

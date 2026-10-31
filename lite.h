@@ -22,8 +22,10 @@ typedef int64_t gint64;
 typedef long glong;
 typedef uint32_t guint32;
 
+#ifndef TRUE
 #define TRUE 1
 #define FALSE 0
+#endif
 #define G_MAXINT 2147483647
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))

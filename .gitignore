@@ -16,3 +16,5 @@ engine_lite.txt
 engine.diff
 test_engine_gtk
 test_engine_lite
+build-win/
+jot.exe
