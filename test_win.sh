@@ -29,6 +29,15 @@ page 'a\nb\n'; run '\dp'; n=$((n + 1))
 if grep -q '^!\[\](assets/.*\.png)$' "$tmp/page/jot.md" && [ -s "$(ls "$tmp"/page/assets/*.png)" ]; then echo "ok    screenshot paste saves a PNG"
 else echo "FAIL  screenshot paste"; fails=$((fails + 1)); fi
 
+for k in '\Pp' "A\\P\\cv$E"; do
+    page 'a\nb\n'; run "$k"; n=$((n + 1))
+    img=$(ls "$tmp"/page/assets/*.png 2>/dev/null | head -1)
+    if grep -q '^!\[\](assets/.*\.png)$' "$tmp/page/jot.md" && [ -s "$img" ]; then echo "ok    a PNG on the clipboard pastes"
+    else echo "FAIL  PNG paste with keys $k: $(cut -c1-60 "$tmp/page/jot.md" | tr '\n' '|')"; fails=$((fails + 1)); fi
+done
+page 'a\n'; run "A\\E\\cv"; n=$((n + 1))
+if grep -q 'Nothing to paste' "$tmp/o.txt"; then echo "ok    an empty paste says why"; else echo "FAIL  silent empty paste"; fails=$((fails + 1)); fi
+
 page 'caf\351\n'; run ''; n=$((n + 1))
 if grep -q "isn't UTF-8" "$tmp/o.txt"; then echo "ok    an unreadable page says so"; else echo "FAIL  no warning"; fails=$((fails + 1)); fi
 page 'a long enough line to measure\n'; run ''; before=$(grep -o 'cols=[0-9]*' "$tmp/o.txt")

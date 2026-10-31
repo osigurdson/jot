@@ -680,8 +680,48 @@ void clipboard_set(const char *text, JotImage *lone_image) {
     CloseClipboard();
 }
 
+/* The registered PNG format on the clipboard, or 0. Apps use one name or the other. */
+static UINT clip_png_format(void) {
+    static const wchar_t *const names[] = {L"PNG", L"image/png"};
+    for (int i = 0; i < 2; i++) {
+        UINT f = RegisterClipboardFormatW(names[i]);
+        if (IsClipboardFormatAvailable(f))
+            return f;
+    }
+    return 0;
+}
+
+static gboolean clip_has_image(void) {
+    return clip_png_format() || IsClipboardFormatAvailable(CF_DIB);
+}
+
+/* PNG on the clipboard needs no converting: its bytes are the asset. */
+static char *clip_png(UINT format) {
+    static const char sig[] = "\x89PNG\r\n\x1a\n";
+    HANDLE h = GetClipboardData(format);
+    const char *data = h ? GlobalLock(h) : NULL;
+    if (!data)
+        return NULL;
+    gsize n = GlobalSize(h);
+    char *rel = NULL;
+    if (n > 8 && memcmp(data, sig, 8) == 0) {
+        g_autofree char *name = asset_name();
+        g_autofree char *abs = join(W.assets_dir, name);
+        if (write_file(abs, data, n))
+            rel = g_strconcat("assets/", name, NULL);
+    }
+    GlobalUnlock(h);
+    return rel;
+}
+
 /* The clipboard's image saved as an asset; NULL if there isn't one. Any bit depth becomes 32. */
 static char *clip_image(void) {
+    UINT png = clip_png_format();
+    if (png) {
+        char *rel = clip_png(png);
+        if (rel)
+            return rel;
+    }
     if (!IsClipboardFormatAvailable(CF_DIB))
         return NULL;
     HANDLE h = GetClipboardData(CF_DIB);
@@ -734,7 +774,7 @@ void ui_clipboard_read(void *request) {
     if (OpenClipboard(W.hwnd)) {
         if (IsClipboardFormatAvailable(CF_UNICODETEXT))
             text = clip_text();
-        else if ((has_image = IsClipboardFormatAvailable(CF_DIB)))
+        else if ((has_image = clip_has_image()))
             image = clip_image();
         CloseClipboard();
     }
@@ -747,6 +787,21 @@ void ui_clipboard_read(void *request) {
     g_free(text);
 }
 
+/* What's on the clipboard, for saying why nothing could be pasted. */
+static char *clip_format_names(void) {
+    GString *g = g_string_new(NULL);
+    for (UINT f = 0; (f = EnumClipboardFormats(f));) {
+        wchar_t name[64];
+        if (GetClipboardFormatNameW(f, name, 64)) {
+            g_autofree char *n = narrow(name);
+            g_string_append_printf(g, "%s ", n);
+        } else {
+            g_string_append_printf(g, "#%u ", f);
+        }
+    }
+    return g_string_free(g, FALSE);
+}
+
 /* Ctrl+V in insert mode: text as typed, or the image on its own line. */
 static void paste(void) {
     char *text = NULL, *image = NULL;
@@ -756,7 +811,12 @@ static void paste(void) {
         text = clip_text();
     else
         image = clip_image();
+    g_autofree char *formats = !text && !image ? clip_format_names() : NULL;
     CloseClipboard();
+    if (formats) {
+        g_autofree char *msg = g_strdup_printf("Nothing to paste. Clipboard has: %s", *formats ? formats : "nothing");
+        toast(msg);
+    }
     if (text) {
         if (W.cmd_open) {
             g_string_append(W.cmd, text);
@@ -1565,6 +1625,31 @@ static void test_clipboard_image(void) {
     CloseClipboard();
 }
 
+/* A PNG on the clipboard, under the name Windows apps use. */
+static void test_clipboard_png(void) {
+    BYTE px[16 * 8 * 4];
+    for (gsize i = 0; i < sizeof px; i += 4)
+        px[i] = 0, px[i + 1] = 200, px[i + 2] = 0, px[i + 3] = 255;
+    g_autofree char *rel = save_png(px, 16, 8);
+    g_autofree char *abs = join(notes_dir, rel);
+    char *data = NULL;
+    gsize n = 0;
+    read_file(abs, &data, &n);
+    g_autofree wchar_t *w = wide(abs);
+    for (wchar_t *p = w; *p; p++)
+        if (*p == '/')
+            *p = '\\';
+    DeleteFileW(w);
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, n);
+    memcpy(GlobalLock(h), data, n);
+    GlobalUnlock(h);
+    g_free(data);
+    OpenClipboard(W.hwnd);
+    EmptyClipboard();
+    SetClipboardData(RegisterClipboardFormatW(L"PNG"), h);
+    CloseClipboard();
+}
+
 /* --selftest: every key goes through the real window procedure. \c = next key with Ctrl, \d = put
  * a screenshot on the clipboard, \D = double the display scale. */
 static int selftest(const char *bmp_path, const char *out_path, const char *keys) {
@@ -1582,6 +1667,18 @@ static int selftest(const char *bmp_path, const char *out_path, const char *keys
             RECT r;
             GetWindowRect(W.hwnd, &r);
             SendMessageW(W.hwnd, WM_DPICHANGED, MAKEWPARAM(W.dpi * 2, W.dpi * 2), (LPARAM)&r);
+            p++;
+            continue;
+        }
+        if (c == '\\' && p[1] == 'P') {
+            test_clipboard_png();
+            p++;
+            continue;
+        }
+        if (c == '\\' && p[1] == 'E') { /* empty the clipboard */
+            OpenClipboard(W.hwnd);
+            EmptyClipboard();
+            CloseClipboard();
             p++;
             continue;
         }
