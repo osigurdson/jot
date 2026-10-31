@@ -10,7 +10,7 @@ Here is the idea:
 
 Well, that is what this thing does. It is a tiny (< 1MiB) 100% local UI app (Linux only atm) written in C. It is vibed coded but so far works well enough for me. 
 
-![jot searching for "u32": the matches are highlighted inside a pasted screenshot of a compiler error](docs/screenshot.png)
+![jot in use: typing a note in vim style, pasting a screenshot of a compiler error, then searching for "u32" and seeing the matches highlighted inside the image](docs/demo.gif)
 
 ## Install
 
