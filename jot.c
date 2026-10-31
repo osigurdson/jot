@@ -599,6 +599,7 @@ static void ocr_done(GObject *src, GAsyncResult *res, gpointer data) {
     g_free(rel);
     ocr_running = FALSE;
     ocr_pump();
+    vim_ocr_changed(TRUE);
 }
 
 static void ocr_pump(void) {
@@ -617,6 +618,7 @@ static void ocr_pump(void) {
             g_hash_table_insert(ocr_text, g_strdup(rel), g_strdup(""));
             g_hash_table_add(ocr_failed, g_strdup(rel));
             g_hash_table_remove(ocr_pending, rel);
+            vim_ocr_changed(TRUE);
             continue;
         }
         g_autoptr(GBytes) pgm = ocr_prepare(tex);
@@ -634,6 +636,11 @@ static void ocr_request(const char *rel) {
     g_hash_table_add(ocr_pending, g_strdup(rel));
     g_queue_push_tail(&ocr_queue, g_strdup(rel));
     ocr_pump();
+    vim_ocr_changed(FALSE);
+}
+
+guint ocr_pending_count(void) {
+    return g_hash_table_size(ocr_pending);
 }
 
 /* Queues every image on the page that hasn't been read yet. */

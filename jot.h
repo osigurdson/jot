@@ -71,6 +71,7 @@ void update_image_selection(void);
 void clipboard_set(const char *text, JotImage *lone_image);
 void save(void);
 void load_page(void);
+guint ocr_pending_count(void); /* images queued for, or in, OCR */
 
 /* Editing, view */
 void indent_range(int first, int last, int direction);
@@ -95,5 +96,6 @@ GtkWidget *vim_build_bar(void);
 void vim_init(void);
 gboolean vim_key(guint keyval, GdkModifierType mods);
 gboolean vim_image_cursor_mode(void);
+void vim_ocr_changed(gboolean finished); /* the OCR queue changed; finished = a read completed */
 
 #endif

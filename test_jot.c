@@ -210,6 +210,7 @@ static void select_all(void) {
 }
 
 static char *img_note_text, *ocr_rel, *clip_text;
+static char *real_tesseract;
 static int width_before_resize, waited, gutter_w3;
 static int step_no;
 
@@ -962,9 +963,97 @@ static gboolean step(gpointer unused) {
         g_autofree char *atext = NULL;
         g_file_get_contents(agents, &atext, NULL, NULL);
         CHECK(g_str_equal(atext, "my own notes for agents\n"), "existing agent files are never overwritten");
-        step_no = 99;
+        if (!tesseract_path) {
+            step_no = 99;
+            break;
+        }
+        /* ---- searching while OCR is running (slowed down so the window is wide open) ---- */
+        real_tesseract = tesseract_path;
+        tesseract_path = g_build_filename(notes_dir, "slow-tesseract", NULL);
+        g_autofree char *script = g_strdup_printf("#!/bin/sh\nsleep 1.5\nexec '%s' \"$@\"\n", real_tesseract);
+        g_file_set_contents(tesseract_path, script, -1, NULL);
+        g_chmod(tesseract_path, 0755);
+        page_at("", 0, 0);
+        CHECK(!gtk_widget_get_visible(GTK_WIDGET(V.ocr_label)), "nothing indexing: no status");
+        g_autoptr(GdkTexture) tex = make_text_texture("Quokka migration checklist");
+        g_autoptr(GBytes) png = gdk_texture_save_to_png_bytes(tex);
+        set_clipboard_bytes("image/png", png);
+        g_signal_emit_by_name(J.view, "paste-clipboard");
         break;
     }
+    case 26:
+        if (!ocr_pending_count() && !first_image() && waited++ < 20) {
+            step_no--;
+            break;
+        }
+        waited = 0;
+        CHECK(gtk_widget_get_visible(GTK_WIDGET(V.ocr_label)) &&
+                  g_str_equal(gtk_label_get_text(V.ocr_label), "indexing image…"),
+              "status line shows indexing while a read runs");
+        feed("/quokka\r");
+        CHECK(strstr(gtk_label_get_text(V.mode_label), "still indexing 1 image") != NULL,
+              "a miss says images are still being read: %s", gtk_label_get_text(V.mode_label));
+        break;
+    case 27: {
+        if (ocr_pending_count() && waited++ < 40) {
+            step_no--;
+            break;
+        }
+        waited = 0;
+        CHECK(!gtk_widget_get_visible(GTK_WIDGET(V.ocr_label)), "indexing status goes away when done");
+        CHECK(V.hl_image != NULL, "the failed search finds its match when the read finishes");
+        /* a search being typed at the prompt updates by itself */
+        page_at("", 0, 0);
+        g_autoptr(GdkTexture) tex = make_text_texture("Wombat burrow survey");
+        g_autoptr(GBytes) png = gdk_texture_save_to_png_bytes(tex);
+        set_clipboard_bytes("image/png", png);
+        g_signal_emit_by_name(J.view, "paste-clipboard");
+        break;
+    }
+    case 28:
+        if (!ocr_pending_count() && !first_image() && waited++ < 20) {
+            step_no--;
+            break;
+        }
+        waited = 0;
+        feed("/wombat");
+        break;
+    case 29: {
+        if (ocr_pending_count() && waited++ < 40) {
+            step_no--;
+            break;
+        }
+        waited = 0;
+        CHECK(V.hl_image != NULL && cmdline_is_open(), "an open / prompt picks up the match when the read finishes");
+        feed("\x1b");
+        /* pressing a key cancels the retry: a late result mustn't move the cursor */
+        page_at("top\nbottom", 0, 0);
+        g_autoptr(GdkTexture) tex = make_text_texture("Numbat foraging notes");
+        g_autoptr(GBytes) png = gdk_texture_save_to_png_bytes(tex);
+        set_clipboard_bytes("image/png", png);
+        feed("G");
+        g_signal_emit_by_name(J.view, "paste-clipboard");
+        break;
+    }
+    case 30:
+        if (!ocr_pending_count() && first_image() == NULL && waited++ < 20) {
+            step_no--;
+            break;
+        }
+        waited = 0;
+        feed("/numbat\r");
+        feed("gg");
+        break;
+    case 31:
+        if (ocr_pending_count() && waited++ < 40) {
+            step_no--;
+            break;
+        }
+        waited = 0;
+        CHECK(cur_line() == 0 && V.hl_image == NULL, "pressing a key cancels the retry");
+        tesseract_path = real_tesseract;
+        step_no = 99;
+        break;
     case 99:
         g_print("\n%s\n", failures ? "SOME TESTS FAILED" : "all tests passed");
         g_application_quit(G_APPLICATION(J.app));

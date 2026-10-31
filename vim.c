@@ -41,11 +41,12 @@ static struct {
     gunichar last_f, last_f_cmd; /* for ; and , */
     gboolean in_insert_group;    /* an insert session (incl. the c that started it) is one undo step */
     gboolean search_hl;          /* the selection is only a search-match highlight */
+    gboolean search_retry, search_retry_fwd; /* a search failed while images were being read */
     JotImage *hl_image;          /* image whose text matched the search: outlined + words highlighted */
     int vis_first, vis_last;     /* lines of the last visual selection, for :'<,'> */
     /* status line / command line */
     GtkStack *stack;
-    GtkLabel *mode_label, *showcmd_label, *pos_label, *cmd_prefix;
+    GtkLabel *mode_label, *showcmd_label, *ocr_label, *pos_label, *cmd_prefix;
     GtkText *cmd;
     gunichar cmd_kind; /* ':' '/' '?' */
     int search_origin;
@@ -508,8 +509,13 @@ static void search_jump(gboolean fwd, int count) {
     get_cursor(&cur);
     Match m = {0};
     if (!do_search(V.last_search, fwd, count, &cur, &m)) {
-        g_autofree char *msg = g_strdup_printf("E486: Pattern not found: %s", V.last_search);
+        guint reading = ocr_pending_count();
+        g_autofree char *msg = reading ? g_strdup_printf("E486: Pattern not found: %s (still indexing %u image%s)",
+                                                         V.last_search, reading, reading == 1 ? "" : "s")
+                                       : g_strdup_printf("E486: Pattern not found: %s", V.last_search);
         vim_message(msg, TRUE);
+        V.search_retry = reading > 0; /* it may be in an image that's still being read */
+        V.search_retry_fwd = fwd;
         return;
     }
     show_match(&m, V.last_search);
@@ -2134,6 +2140,7 @@ static Res vim_exec(const char *keys) {
 /* ------------------------------------------------------------------------- */
 
 static void vim_input(gunichar c) {
+    V.search_retry = FALSE; /* the user moved on: don't jump later */
     if (V.message_shown) {
         V.message_shown = FALSE;
         update_status();
@@ -2293,8 +2300,34 @@ GtkWidget *vim_build_bar(void) {
 
     gtk_box_append(GTK_BOX(bar), GTK_WIDGET(V.stack));
     gtk_box_append(GTK_BOX(bar), GTK_WIDGET(V.showcmd_label));
+    V.ocr_label = GTK_LABEL(gtk_label_new(NULL));
+    gtk_widget_add_css_class(GTK_WIDGET(V.ocr_label), "dim-label");
+    gtk_widget_set_visible(GTK_WIDGET(V.ocr_label), FALSE);
+    gtk_box_append(GTK_BOX(bar), GTK_WIDGET(V.ocr_label));
     gtk_box_append(GTK_BOX(bar), GTK_WIDGET(V.pos_label));
     return bar;
+}
+
+/* Shows OCR progress in the status line; when a read finishes, re-runs a search it may affect:
+ * one being typed at the prompt, or one that just failed (unless a key has been pressed since). */
+void vim_ocr_changed(gboolean finished) {
+    if (!V.ocr_label)
+        return;
+    guint n = ocr_pending_count();
+    if (n) {
+        g_autofree char *text = n == 1 ? g_strdup("indexing image…") : g_strdup_printf("indexing %u images…", n);
+        gtk_label_set_text(V.ocr_label, text);
+    }
+    gtk_widget_set_visible(GTK_WIDGET(V.ocr_label), n > 0);
+    if (!finished)
+        return;
+    if (cmdline_is_open()) {
+        if (V.cmd_kind != ':')
+            on_cmd_changed(GTK_EDITABLE(V.cmd), NULL);
+    } else if (V.search_retry) {
+        V.search_retry = FALSE;
+        search_jump(V.search_retry_fwd, 1);
+    }
 }
 
 /* After the editor exists and the page is loaded: start in normal mode. */
