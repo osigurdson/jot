@@ -2,7 +2,7 @@
 
 # jot
 
-A tiny, local, vim-like scratch pad. Paste in text and images and search both (requires tesseract for image search - see install instructions below). It's 100% vibe coded primarily for my own use but feel free to use it. 
+A tiny, local, vim-like scratch pad. Paste in text and images and search both (requires tesseract for image search - see install instructions below). It's 100% vibe coded primarily for my own use but feel free to use it. Currently Linux only. 
 
 ![jot in use: typing a note in vim style, pasting a screenshot of a latency dashboard, then searching for "checkout" and stepping through matches in the notes and inside the image](docs/demo.gif)
 
