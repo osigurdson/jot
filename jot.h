@@ -4,14 +4,16 @@
 
 #ifdef JOT_LITE
 #include "lite.h"
+#include "buf.h"
 #else
 #include <adwaita.h>
+#include "buf_gtk.h"
 #endif
 
 #include "ui.h"
 
 #define APP_ID "dev.jot.Jot"
-#define OBJ_UTF8 "\xef\xbf\xbc" /* U+FFFC: what GtkTextBuffer reports for an embedded image */
+#define OBJ_UTF8 "\xef\xbf\xbc" /* U+FFFC: what JotBuf reports for an embedded image */
 #define INDENT "    "
 
 /* ------------------------------------------------------------------------- */
@@ -30,18 +32,8 @@ typedef struct JotImage {
     void *platform;
 } JotImage;
 
-#define JOT_IS_IMAGE(p) ((p) != NULL)
-#define JOT_IMAGE(p) (p)
-#define GDK_PAINTABLE(p) (p)
-static inline JotImage *g_object_ref(JotImage *img) {
-    lite_image_ref(img);
-    return img;
-}
-#define g_object_unref lite_image_unref
-#define g_clear_object(pp) g_clear_pointer(pp, lite_image_unref)
-
 typedef struct {
-    GtkTextBuffer *buf;
+    JotBuf *buf;
     gboolean line_numbers;
 } Jot;
 
@@ -66,7 +58,7 @@ typedef struct {
     GtkApplication *app;
     GtkWindow *win;
     GtkTextView *view;
-    GtkTextBuffer *buf;
+    JotBuf *buf;
     AdwToastOverlay *toasts;
     GtkCssProvider *css;
     GtkWidget *gutter;
@@ -79,13 +71,23 @@ typedef struct {
     int font_size;
 } Jot;
 
+#define jot_image_ref(img) ((JotImage *)g_object_ref(img))
+#define jot_image_unref g_object_unref
+
+/* The image at `it`, or NULL. */
+static inline JotImage *jb_iter_get_image(const JotIter *it) {
+    GdkPaintable *p = gtk_text_iter_get_paintable(it);
+    return JOT_IS_IMAGE(p) ? JOT_IMAGE(p) : NULL;
+}
+#define jb_insert_image(b, it, img) gtk_text_buffer_insert_paintable(b, it, GDK_PAINTABLE(img))
+
 #endif
 
 extern Jot J;
 
 /* A search match, in the text or in an image's OCR text. */
 typedef struct {
-    GtkTextIter start, end;
+    JotIter start, end;
     JotImage *img; /* set when the match is in an image's OCR text */
     char *line;    /* ...and this is the matching line of that text (owned) */
     gboolean wrapped;
@@ -93,11 +95,11 @@ typedef struct {
 
 /* Images, text, saving */
 void toast(const char *msg);
-void cursor_iter(GtkTextIter *it);
-char *serialize(GtkTextBuffer *buf);
-char *serialize_range(GtkTextBuffer *buf, const GtkTextIter *start, const GtkTextIter *end);
-void insert_text(GtkTextBuffer *buf, GtkTextIter *it, const char *raw);
-void insert_images(GPtrArray *rels, const GtkTextIter *at);
+void cursor_iter(JotIter *it);
+char *serialize(JotBuf *buf);
+char *serialize_range(JotBuf *buf, const JotIter *start, const JotIter *end);
+void insert_text(JotBuf *buf, JotIter *it, const char *raw);
+void insert_images(GPtrArray *rels, const JotIter *at);
 JotImage *load_image(const char *rel);
 const char *ocr_lookup(const char *rel); /* an image's text, NULL if not read yet */
 void ocr_request(const char *rel);
@@ -117,16 +119,31 @@ void edit_type(const char *text);
 void edit_return(void);
 void edit_tab(gboolean shift);
 void set_line_numbers(gboolean show);
-gboolean find_match(const char *q, gboolean case_sensitive, const GtkTextIter *from, gboolean forward, Match *m);
+gboolean find_match(const char *q, gboolean case_sensitive, const JotIter *from, gboolean forward, Match *m);
 
 /* ------------------------------------------------------------------------- */
 /* md.c                                                                       */
 /* ------------------------------------------------------------------------- */
 
+enum {
+    T_CODEBLOCK,
+    T_CODE,
+    T_QUOTE,
+    T_HEADING,
+    T_BOLD,
+    T_ITALIC,
+    T_BULLET,
+    T_QUOTE_MARK,
+    T_LINK,
+    T_DONE,
+    T_DIM, /* last: highest priority, so markers stay dim inside headings, links... */
+    N_TAGS
+};
+
 void md_init(void);
 gboolean md_enabled(void);
 void md_set_enabled(gboolean on);
-gboolean md_open_url_at(const GtkTextIter *it);
+gboolean md_open_url_at(const JotIter *it);
 int md_heading_line(int line, int dir);
 
 /* ------------------------------------------------------------------------- */

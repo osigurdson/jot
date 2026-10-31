@@ -1,8 +1,5 @@
-/* lite.h - the small part of GLib and GtkTextBuffer that the engine (vim.c, md.c, core.c) uses,
- * for platforms without GTK. Same names and same behavior, so those files need no changes, and
- * test_engine.c runs one set of key scripts against this and against real GTK to keep it honest.
- *
- * Add to this only what the engine calls. It is not a GLib port.
+/* lite.h - the small part of GLib the engine (vim.c, md.c, core.c, buf.c) uses, for platforms
+ * without it: same names and same behavior. Add only what the engine calls; it is not a GLib port.
  */
 #ifndef JOT_LITE_H
 #define JOT_LITE_H
@@ -171,100 +168,5 @@ static inline void lite_unref_GError(GError **e) {
 guint g_idle_add_full(int priority, gboolean (*fn)(gpointer), gpointer data, void (*destroy)(gpointer));
 void lite_idle_run(void);
 gboolean lite_idle_pending(void);
-
-/* ---- Text buffer ---------------------------------------------------------- */
-
-typedef struct GtkTextBuffer GtkTextBuffer;
-typedef struct GtkTextMark GtkTextMark;
-typedef struct LiteTag GtkTextTag;
-typedef struct JotImage GdkPaintable; /* an embedded image: U+FFFC in the text */
-
-typedef struct {
-    GtkTextBuffer *buf;
-    int off;
-} GtkTextIter;
-
-typedef enum {
-    GTK_TEXT_SEARCH_TEXT_ONLY = 1,
-    GTK_TEXT_SEARCH_CASE_INSENSITIVE = 2
-} GtkTextSearchFlags;
-
-/* The buffer keeps images alive with these (JotImage's own refcount). */
-void lite_image_ref(GdkPaintable *img);
-void lite_image_unref(GdkPaintable *img);
-
-GtkTextBuffer *gtk_text_buffer_new(void *unused);
-void gtk_text_buffer_free(GtkTextBuffer *b);
-
-GtkTextTag *gtk_text_buffer_create_tag(GtkTextBuffer *b, const char *name, const char *first_prop);
-void gtk_text_buffer_apply_tag(GtkTextBuffer *b, GtkTextTag *t, const GtkTextIter *s, const GtkTextIter *e);
-void gtk_text_buffer_remove_tag(GtkTextBuffer *b, GtkTextTag *t, const GtkTextIter *s, const GtkTextIter *e);
-unsigned lite_tags_at(GtkTextBuffer *b, int offset); /* bit n = the nth tag created */
-const gunichar *lite_chars(GtkTextBuffer *b);        /* unused by the engine; see lite_copy_line */
-int lite_copy_line(GtkTextBuffer *b, int line, gunichar *ch, unsigned *tags, int max);
-
-extern gboolean lite_merge_deletes;
-void gtk_text_buffer_begin_user_action(GtkTextBuffer *b);
-void gtk_text_buffer_end_user_action(GtkTextBuffer *b);
-void gtk_text_buffer_begin_irreversible_action(GtkTextBuffer *b);
-void gtk_text_buffer_end_irreversible_action(GtkTextBuffer *b);
-gboolean gtk_text_buffer_get_can_undo(GtkTextBuffer *b);
-gboolean gtk_text_buffer_get_can_redo(GtkTextBuffer *b);
-void gtk_text_buffer_undo(GtkTextBuffer *b);
-void gtk_text_buffer_redo(GtkTextBuffer *b);
-
-void gtk_text_buffer_insert(GtkTextBuffer *b, GtkTextIter *it, const char *text, int len);
-void gtk_text_buffer_insert_at_cursor(GtkTextBuffer *b, const char *text, int len);
-void gtk_text_buffer_insert_paintable(GtkTextBuffer *b, GtkTextIter *it, GdkPaintable *p);
-void gtk_text_buffer_delete(GtkTextBuffer *b, GtkTextIter *s, GtkTextIter *e);
-gboolean gtk_text_buffer_delete_selection(GtkTextBuffer *b, gboolean interactive, gboolean editable);
-void gtk_text_buffer_set_text(GtkTextBuffer *b, const char *text, int len);
-char *gtk_text_buffer_get_text(GtkTextBuffer *b, const GtkTextIter *s, const GtkTextIter *e, gboolean hidden);
-char *gtk_text_buffer_get_slice(GtkTextBuffer *b, const GtkTextIter *s, const GtkTextIter *e, gboolean hidden);
-
-int gtk_text_buffer_get_char_count(GtkTextBuffer *b);
-int gtk_text_buffer_get_line_count(GtkTextBuffer *b);
-void gtk_text_buffer_get_start_iter(GtkTextBuffer *b, GtkTextIter *it);
-void gtk_text_buffer_get_end_iter(GtkTextBuffer *b, GtkTextIter *it);
-void gtk_text_buffer_get_bounds(GtkTextBuffer *b, GtkTextIter *s, GtkTextIter *e);
-gboolean gtk_text_buffer_get_iter_at_line(GtkTextBuffer *b, GtkTextIter *it, int line);
-void gtk_text_buffer_get_iter_at_offset(GtkTextBuffer *b, GtkTextIter *it, int offset);
-void gtk_text_buffer_get_iter_at_mark(GtkTextBuffer *b, GtkTextIter *it, GtkTextMark *m);
-
-GtkTextMark *gtk_text_buffer_create_mark(GtkTextBuffer *b, const char *name, const GtkTextIter *at, gboolean left_gravity);
-void gtk_text_buffer_move_mark(GtkTextBuffer *b, GtkTextMark *m, const GtkTextIter *at);
-GtkTextMark *gtk_text_buffer_get_insert(GtkTextBuffer *b);
-void gtk_text_buffer_place_cursor(GtkTextBuffer *b, const GtkTextIter *at);
-void gtk_text_buffer_select_range(GtkTextBuffer *b, const GtkTextIter *ins, const GtkTextIter *bound);
-gboolean gtk_text_buffer_get_selection_bounds(GtkTextBuffer *b, GtkTextIter *s, GtkTextIter *e);
-gboolean gtk_text_buffer_get_has_selection(GtkTextBuffer *b);
-
-gunichar gtk_text_iter_get_char(const GtkTextIter *it);
-GdkPaintable *gtk_text_iter_get_paintable(const GtkTextIter *it);
-int gtk_text_iter_get_offset(const GtkTextIter *it);
-int gtk_text_iter_get_line(const GtkTextIter *it);
-int gtk_text_iter_get_line_offset(const GtkTextIter *it);
-void gtk_text_iter_set_line_offset(GtkTextIter *it, int col);
-gboolean gtk_text_iter_is_start(const GtkTextIter *it);
-gboolean gtk_text_iter_is_end(const GtkTextIter *it);
-gboolean gtk_text_iter_starts_line(const GtkTextIter *it);
-gboolean gtk_text_iter_ends_line(const GtkTextIter *it);
-gboolean gtk_text_iter_equal(const GtkTextIter *a, const GtkTextIter *b);
-int gtk_text_iter_compare(const GtkTextIter *a, const GtkTextIter *b);
-gboolean gtk_text_iter_forward_char(GtkTextIter *it);
-gboolean gtk_text_iter_backward_char(GtkTextIter *it);
-gboolean gtk_text_iter_forward_chars(GtkTextIter *it, int n);
-gboolean gtk_text_iter_forward_line(GtkTextIter *it);
-gboolean gtk_text_iter_forward_to_line_end(GtkTextIter *it);
-gboolean gtk_text_iter_forward_find_char(GtkTextIter *it, gboolean (*pred)(gunichar, gpointer), gpointer data, const GtkTextIter *limit);
-gboolean gtk_text_iter_backward_find_char(GtkTextIter *it, gboolean (*pred)(gunichar, gpointer), gpointer data, const GtkTextIter *limit);
-gboolean gtk_text_iter_forward_search(const GtkTextIter *it, const char *q, GtkTextSearchFlags f, GtkTextIter *ms, GtkTextIter *me, const GtkTextIter *limit);
-gboolean gtk_text_iter_backward_search(const GtkTextIter *it, const char *q, GtkTextSearchFlags f, GtkTextIter *ms, GtkTextIter *me, const GtkTextIter *limit);
-
-/* Signals: "insert-text", "delete-range", "changed", "mark-set", as GtkTextBuffer sends them. */
-void lite_signal_connect(GtkTextBuffer *b, const char *name, void (*fn)(void), gpointer data, int mode);
-#define g_signal_connect(o, name, fn, data) lite_signal_connect(o, name, fn, data, 0)
-#define g_signal_connect_after(o, name, fn, data) lite_signal_connect(o, name, fn, data, 1)
-#define g_signal_connect_swapped(o, name, fn, data) lite_signal_connect(o, name, fn, data, 2)
 
 #endif

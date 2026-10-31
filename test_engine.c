@@ -8,9 +8,6 @@
  * Scripts come from the array below (written by hand), from engine_scripts.inc (harvested from
  * test_jot.c), and from a seeded fuzzer: both builds see the same random keys.
  */
-#ifndef JOT_LITE
-#define JOT_HEADLESS
-#endif
 #include "core.c"
 #include "md.c"
 #include "vim.c"
@@ -54,12 +51,13 @@ gboolean ui_cmd_is_open(void) { return F.cmd_open; }
 const char *ui_cmd_text(void) { return F.cmd; }
 void ui_block_cursor(gboolean b) { (void)b; }
 void ui_bell(void) { F.bells++; }
-void ui_scroll_mark_onscreen(GtkTextMark *m) { (void)m; }
-void ui_scroll_mark_to(GtkTextMark *m, double y) { (void)m, (void)y; }
-void ui_scroll_iter_onscreen(const GtkTextIter *it) { (void)it; }
-void ui_scroll_lines(const GtkTextIter *c, int d, int n) { (void)c, (void)d, (void)n; }
-void ui_visible_lines(int *t, int *b) { *t = 0; *b = MIN(19, gtk_text_buffer_get_line_count(J.buf) - 1); }
-double ui_iter_screen_pos(const GtkTextIter *it) { (void)it; return 0.5; }
+void ui_scroll_mark_onscreen(JotMark *m) { (void)m; }
+void ui_scroll_mark_to(JotMark *m, double y) { (void)m, (void)y; }
+void ui_scroll_iter_onscreen(const JotIter *it) { (void)it; }
+void ui_scroll_lines(const JotIter *c, int d, int n) { (void)c, (void)d, (void)n; }
+void ui_visible_lines(int *t, int *b) { *t = 0; *b = MIN(19, jb_get_line_count(J.buf) - 1); }
+double ui_iter_screen_pos(const JotIter *it) { (void)it; return 0.5; }
+void ui_md_style(JotTag **t) { (void)t; }
 void ui_quit(void) {}
 void ui_open_folder(const char *p) { (void)p; }
 void ui_open_uri(const char *u) { printf("  open %s\n", u); }
@@ -92,15 +90,17 @@ const char *ocr_lookup(const char *rel) { (void)rel; return NULL; }
 void ocr_request(const char *rel) { (void)rel; }
 
 #ifdef JOT_LITE
-void lite_image_ref(JotImage *i) { i->refs++; }
-void lite_image_unref(JotImage *i) {
+JotImage *jot_image_ref(JotImage *i) {
+    i->refs++;
+    return i;
+}
+void jot_image_unref(JotImage *i) {
     if (--i->refs == 0) {
         g_free(i->path);
         g_free(i);
     }
 }
 #else
-struct _JotImageClass_unused;
 G_DEFINE_FINAL_TYPE(JotImage, jot_image, G_TYPE_OBJECT)
 static void jot_image_class_init(JotImageClass *k) { (void)k; }
 static void jot_image_init(JotImage *s) { (void)s; }
@@ -167,12 +167,12 @@ static void set_page(const char *text, int line, int col) {
         leave_insert();
     if (is_visual())
         exit_visual(-1);
-    gtk_text_buffer_begin_irreversible_action(J.buf);
-    gtk_text_buffer_set_text(J.buf, "", 0);
-    GtkTextIter it;
-    gtk_text_buffer_get_start_iter(J.buf, &it);
+    jb_begin_irreversible_action(J.buf);
+    jb_set_text(J.buf, "", 0);
+    JotIter it;
+    jb_get_start_iter(J.buf, &it);
     insert_text(J.buf, &it, text);
-    gtk_text_buffer_end_irreversible_action(J.buf);
+    jb_end_irreversible_action(J.buf);
     iter_line_col(&it, line, col);
     set_cursor(&it);
     g_string_truncate(V.pending, 0);
@@ -198,9 +198,9 @@ static void reset_state(void) {
 /* Everything a script can leave behind, escaped onto one line. */
 static void dump(const char *label) {
     g_autofree char *text = serialize(J.buf);
-    GtkTextIter c, s, e;
+    JotIter c, s, e;
     get_cursor(&c);
-    gboolean sel = gtk_text_buffer_get_selection_bounds(J.buf, &s, &e);
+    gboolean sel = jb_get_selection_bounds(J.buf, &s, &e);
     printf("%s\n  text ", label);
     for (const char *p = text; *p; p++) {
         if (*p == '\n')
@@ -212,10 +212,10 @@ static void dump(const char *label) {
         else
             putchar(*p);
     }
-    printf("\n  cur %d line %d col %d mode %d", gtk_text_iter_get_offset(&c), gtk_text_iter_get_line(&c),
-           gtk_text_iter_get_line_offset(&c), V.mode);
+    printf("\n  cur %d line %d col %d mode %d", jb_iter_get_offset(&c), jb_iter_get_line(&c),
+           jb_iter_get_line_offset(&c), V.mode);
     if (sel)
-        printf(" sel %d-%d", gtk_text_iter_get_offset(&s), gtk_text_iter_get_offset(&e));
+        printf(" sel %d-%d", jb_iter_get_offset(&s), jb_iter_get_offset(&e));
     printf(" pend [%s] cmd %d [%s]\n  status %d [%s] keys [%s] pos [%s] bells %d\n", V.pending->str, F.cmd_open, F.cmd,
            F.error, F.mode, F.keys, F.pos, F.bells);
 }
@@ -223,30 +223,30 @@ static void dump(const char *label) {
 /* Which Markdown styles sit on which characters. */
 static void dump_styles(const char *label) {
     printf("%s\n", label);
-    GtkTextIter it;
-    gtk_text_buffer_get_start_iter(J.buf, &it);
+    JotIter it;
+    jb_get_start_iter(J.buf, &it);
     for (int t = 0; t < N_TAGS; t++) {
-        GtkTextIter i = it;
+        JotIter i = it;
         int start = -1;
         printf("  tag %d:", t);
         for (;;) {
             gboolean on;
 #ifdef JOT_LITE
-            on = (lite_tags_at(J.buf, gtk_text_iter_get_offset(&i)) >> t) & 1;
+            on = (jb_tags_at(J.buf, jb_iter_get_offset(&i)) >> t) & 1;
 #else
-            on = gtk_text_iter_has_tag(&i, M.tag[t]);
+            on = jb_iter_has_tag(&i, M.tag[t]);
 #endif
-            if (gtk_text_iter_is_end(&i))
+            if (jb_iter_is_end(&i))
                 on = FALSE;
             if (on && start < 0)
-                start = gtk_text_iter_get_offset(&i);
+                start = jb_iter_get_offset(&i);
             if (!on && start >= 0) {
-                printf(" %d-%d", start, gtk_text_iter_get_offset(&i));
+                printf(" %d-%d", start, jb_iter_get_offset(&i));
                 start = -1;
             }
-            if (gtk_text_iter_is_end(&i))
+            if (jb_iter_is_end(&i))
                 break;
-            gtk_text_iter_forward_char(&i);
+            jb_iter_forward_char(&i);
         }
         printf("\n");
     }
@@ -348,9 +348,9 @@ int main(int argc, char **argv) {
     gboolean no_undo = argc > 2 && g_str_equal(argv[2], "no-undo"); /* see check-engine */
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);
 #ifdef JOT_LITE
-    lite_merge_deletes = TRUE;
+    jb_merge_deletes = TRUE;
 #endif
-    J.buf = gtk_text_buffer_new(NULL);
+    J.buf = jb_new();
     md_init();
     vim_init();
     md_set_enabled(TRUE);
@@ -364,7 +364,7 @@ int main(int argc, char **argv) {
 #ifdef JOT_LITE
     /* Shipped behavior, which GTK doesn't have: one undo per command, like vim. */
     if (argc > 1 && g_str_equal(argv[1], "undo-steps")) {
-        lite_merge_deletes = FALSE;
+        jb_merge_deletes = FALSE;
         set_page("alpha", 0, 0);
         feed("xxu");
         g_autofree char *t = serialize(J.buf);

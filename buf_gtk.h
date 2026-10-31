@@ -1,0 +1,74 @@
+/* buf_gtk.h - buf.h's names on GtkTextBuffer, for Linux while the editor is GTK's text view. */
+#ifndef JOT_BUF_GTK_H
+#define JOT_BUF_GTK_H
+
+#include <gtk/gtk.h>
+
+typedef GtkTextBuffer JotBuf;
+typedef GtkTextIter JotIter;
+typedef GtkTextMark JotMark;
+typedef GtkTextTag JotTag;
+typedef GtkTextSearchFlags JotSearchFlags;
+#define JB_SEARCH_TEXT_ONLY GTK_TEXT_SEARCH_TEXT_ONLY
+#define JB_SEARCH_CASE_INSENSITIVE GTK_TEXT_SEARCH_CASE_INSENSITIVE
+
+#define jb_new() gtk_text_buffer_new(NULL)
+#define jb_create_tag(b, name) gtk_text_buffer_create_tag(b, name, NULL)
+#define jb_connect g_signal_connect
+#define jb_connect_after g_signal_connect_after
+#define jb_connect_swapped g_signal_connect_swapped
+
+#define jb_apply_tag gtk_text_buffer_apply_tag
+#define jb_begin_irreversible_action gtk_text_buffer_begin_irreversible_action
+#define jb_begin_user_action gtk_text_buffer_begin_user_action
+#define jb_create_mark gtk_text_buffer_create_mark
+#define jb_delete gtk_text_buffer_delete
+#define jb_delete_selection gtk_text_buffer_delete_selection
+#define jb_end_irreversible_action gtk_text_buffer_end_irreversible_action
+#define jb_end_user_action gtk_text_buffer_end_user_action
+#define jb_get_bounds gtk_text_buffer_get_bounds
+#define jb_get_can_redo gtk_text_buffer_get_can_redo
+#define jb_get_can_undo gtk_text_buffer_get_can_undo
+#define jb_get_char_count gtk_text_buffer_get_char_count
+#define jb_get_end_iter gtk_text_buffer_get_end_iter
+#define jb_get_insert gtk_text_buffer_get_insert
+#define jb_get_iter_at_line gtk_text_buffer_get_iter_at_line
+#define jb_get_iter_at_mark gtk_text_buffer_get_iter_at_mark
+#define jb_get_iter_at_offset gtk_text_buffer_get_iter_at_offset
+#define jb_get_line_count gtk_text_buffer_get_line_count
+#define jb_get_selection_bounds gtk_text_buffer_get_selection_bounds
+#define jb_get_slice gtk_text_buffer_get_slice
+#define jb_get_start_iter gtk_text_buffer_get_start_iter
+#define jb_get_text gtk_text_buffer_get_text
+#define jb_insert gtk_text_buffer_insert
+#define jb_insert_at_cursor gtk_text_buffer_insert_at_cursor
+#define jb_iter_backward_char gtk_text_iter_backward_char
+#define jb_iter_backward_find_char gtk_text_iter_backward_find_char
+#define jb_iter_backward_search gtk_text_iter_backward_search
+#define jb_iter_compare gtk_text_iter_compare
+#define jb_iter_ends_line gtk_text_iter_ends_line
+#define jb_iter_equal gtk_text_iter_equal
+#define jb_iter_forward_char gtk_text_iter_forward_char
+#define jb_iter_forward_chars gtk_text_iter_forward_chars
+#define jb_iter_forward_find_char gtk_text_iter_forward_find_char
+#define jb_iter_forward_line gtk_text_iter_forward_line
+#define jb_iter_forward_search gtk_text_iter_forward_search
+#define jb_iter_forward_to_line_end gtk_text_iter_forward_to_line_end
+#define jb_iter_get_char gtk_text_iter_get_char
+#define jb_iter_get_line gtk_text_iter_get_line
+#define jb_iter_get_line_offset gtk_text_iter_get_line_offset
+#define jb_iter_get_offset gtk_text_iter_get_offset
+#define jb_iter_has_tag gtk_text_iter_has_tag
+#define jb_iter_is_end gtk_text_iter_is_end
+#define jb_iter_is_start gtk_text_iter_is_start
+#define jb_iter_set_line_offset gtk_text_iter_set_line_offset
+#define jb_iter_starts_line gtk_text_iter_starts_line
+#define jb_move_mark gtk_text_buffer_move_mark
+#define jb_place_cursor gtk_text_buffer_place_cursor
+#define jb_redo gtk_text_buffer_redo
+#define jb_remove_tag gtk_text_buffer_remove_tag
+#define jb_select_range gtk_text_buffer_select_range
+#define jb_set_text gtk_text_buffer_set_text
+#define jb_undo gtk_text_buffer_undo
+
+#endif

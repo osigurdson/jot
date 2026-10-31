@@ -7,10 +7,6 @@
 #ifndef JOT_UI_H
 #define JOT_UI_H
 
-#ifndef JOT_LITE
-#include <gtk/gtk.h>
-#endif
-
 /* Keys that aren't text. Everything else reaches vim_key() as JK_CHAR plus its character. */
 typedef enum {
     JK_NONE, /* no character and no meaning: a modifier, a function key */
@@ -50,12 +46,15 @@ void ui_cmd_set_text(const char *text); /* puts the caret at the end */
 /* The view */
 void ui_block_cursor(gboolean block);
 void ui_bell(void);
-void ui_scroll_mark_onscreen(GtkTextMark *mark);
-void ui_scroll_mark_to(GtkTextMark *mark, double yalign); /* 0 top, 0.5 middle, 1 bottom */
-void ui_scroll_iter_onscreen(const GtkTextIter *it);      /* with a little context around it */
-void ui_scroll_lines(const GtkTextIter *cursor, int dir, int count);
+void ui_scroll_mark_onscreen(JotMark *mark);
+void ui_scroll_mark_to(JotMark *mark, double yalign); /* 0 top, 0.5 middle, 1 bottom */
+void ui_scroll_iter_onscreen(const JotIter *it);      /* with a little context around it */
+void ui_scroll_lines(const JotIter *cursor, int dir, int count);
 void ui_visible_lines(int *top, int *bottom);
-double ui_iter_screen_pos(const GtkTextIter *it); /* 0 top of the view .. 1 bottom */
+double ui_iter_screen_pos(const JotIter *it); /* 0 top of the view .. 1 bottom */
+
+/* How each Markdown style looks: tags[] is indexed by the T_ values in jot.h. */
+void ui_md_style(JotTag **tags);
 
 /* The system */
 void ui_quit(void);

@@ -9,7 +9,7 @@ SRCS    := jot.c core.c md.c vim.c ui_gtk.c
 jot: $(SRCS:.c=.o)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-%.o: %.c jot.h ui.h compile_flags.txt
+%.o: %.c jot.h ui.h buf_gtk.h compile_flags.txt
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # For clangd (editor diagnostics / go-to-definition): the same flags the build uses.
@@ -18,7 +18,7 @@ compile_flags.txt: Makefile
 
 # Headless UI tests (GTK Broadway backend, nothing appears on screen). test_jot.c #includes the
 # .c files, so the tests can reach their internals (vim's mode, Markdown's tags...).
-test_jot: test_jot.c $(SRCS) jot.h ui.h
+test_jot: test_jot.c $(SRCS) jot.h ui.h buf_gtk.h
 	$(CC) $(CFLAGS) -fsanitize=address,undefined -o $@ $< $(LDLIBS)
 
 check: test_jot
@@ -30,13 +30,13 @@ check: test_jot
 
 # The engine with no window: the same key scripts against real GTK and against lite.c (the
 # platforms without GTK use it), which must leave identical results.
-ENGINE_SRCS := test_engine.c core.c md.c vim.c jot.h ui.h engine_scripts.inc
+ENGINE_SRCS := test_engine.c core.c md.c vim.c jot.h ui.h buf_gtk.h engine_scripts.inc
 PCRE    := $(shell pkg-config --cflags --libs libpcre2-8)
 test_engine_gtk: $(ENGINE_SRCS)
 	$(CC) $(CFLAGS) -DENGINE_HARVEST -fsanitize=address,undefined -o $@ $< $(LDLIBS)
 
-test_engine_lite: $(ENGINE_SRCS) lite.c lite.h
-	$(CC) -std=gnu11 -g -O1 -Wall -Wextra -DJOT_LITE -DENGINE_HARVEST -fsanitize=address,undefined -o $@ $< lite.c $(PCRE)
+test_engine_lite: $(ENGINE_SRCS) buf.c buf.h lite.c lite.h
+	$(CC) -std=gnu11 -g -O1 -Wall -Wextra -DJOT_LITE -DENGINE_HARVEST -fsanitize=address,undefined -o $@ $< buf.c lite.c $(PCRE)
 
 # Without undo the two must match exactly. GTK merges adjacent deletes in its undo history (so `xxu`
 # undoes both, unlike vim); lite.c doesn't, and only imitates it for this comparison, not perfectly,

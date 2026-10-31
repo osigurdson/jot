@@ -33,7 +33,7 @@ static struct {
     Mode mode;
     GString *pending;
     int want_col;               /* sticky column for j/k: -1 = take it from the cursor, G_MAXINT = $ */
-    GtkTextMark *anchor, *vcur; /* visual mode: where it started, and the cursor end */
+    JotMark *anchor, *vcur; /* visual mode: where it started, and the cursor end */
     char *reg;                  /* last yank/delete, to tell linewise text apart on the clipboard */
     gboolean reg_linewise;
     char *last_search;
@@ -80,57 +80,57 @@ static gboolean is_visual(void) {
     return V.mode == MODE_VISUAL || V.mode == MODE_VISUAL_LINE;
 }
 
-static int offset_of(const GtkTextIter *it) {
-    return gtk_text_iter_get_offset(it);
+static int offset_of(const JotIter *it) {
+    return jb_iter_get_offset(it);
 }
 
-static void iter_at(GtkTextIter *it, int offset) {
-    gtk_text_buffer_get_iter_at_offset(J.buf, it, offset);
+static void iter_at(JotIter *it, int offset) {
+    jb_get_iter_at_offset(J.buf, it, offset);
 }
 
 static int line_count(void) {
-    return gtk_text_buffer_get_line_count(J.buf);
+    return jb_get_line_count(J.buf);
 }
 
-static void iter_line(GtkTextIter *it, int line) {
-    gtk_text_buffer_get_iter_at_line(J.buf, it, CLAMP(line, 0, line_count() - 1));
+static void iter_line(JotIter *it, int line) {
+    jb_get_iter_at_line(J.buf, it, CLAMP(line, 0, line_count() - 1));
 }
 
-static void to_line_end(GtkTextIter *it) {
-    if (!gtk_text_iter_ends_line(it))
-        gtk_text_iter_forward_to_line_end(it);
+static void to_line_end(JotIter *it) {
+    if (!jb_iter_ends_line(it))
+        jb_iter_forward_to_line_end(it);
 }
 
 static int line_length(int line) {
-    GtkTextIter it;
+    JotIter it;
     iter_line(&it, line);
     to_line_end(&it);
-    return gtk_text_iter_get_line_offset(&it);
+    return jb_iter_get_line_offset(&it);
 }
 
-static void first_nonblank(GtkTextIter *it) {
-    gtk_text_iter_set_line_offset(it, 0);
-    while (!gtk_text_iter_ends_line(it) && (gtk_text_iter_get_char(it) == ' ' || gtk_text_iter_get_char(it) == '\t'))
-        gtk_text_iter_forward_char(it);
+static void first_nonblank(JotIter *it) {
+    jb_iter_set_line_offset(it, 0);
+    while (!jb_iter_ends_line(it) && (jb_iter_get_char(it) == ' ' || jb_iter_get_char(it) == '\t'))
+        jb_iter_forward_char(it);
 }
 
 /* Line `line`, column `col`; in normal mode the cursor can't sit on the newline. */
-static void iter_line_col(GtkTextIter *it, int line, int col) {
+static void iter_line_col(JotIter *it, int line, int col) {
     int len = line_length(line);
     int max = (V.mode != MODE_INSERT && len > 0) ? len - 1 : len;
     iter_line(it, line);
-    gtk_text_iter_set_line_offset(it, CLAMP(col, 0, max));
+    jb_iter_set_line_offset(it, CLAMP(col, 0, max));
 }
 
-static void clamp_normal(GtkTextIter *it) {
-    if (gtk_text_iter_ends_line(it) && !gtk_text_iter_starts_line(it))
-        gtk_text_iter_backward_char(it);
+static void clamp_normal(JotIter *it) {
+    if (jb_iter_ends_line(it) && !jb_iter_starts_line(it))
+        jb_iter_backward_char(it);
 }
 
 /* The vim cursor: the insert mark, or the moving end of a visual selection. */
-static void get_cursor(GtkTextIter *it) {
+static void get_cursor(JotIter *it) {
     if (is_visual())
-        gtk_text_buffer_get_iter_at_mark(J.buf, it, V.vcur);
+        jb_get_iter_at_mark(J.buf, it, V.vcur);
     else
         cursor_iter(it);
 }
@@ -168,10 +168,10 @@ static void update_status(void) {
     }
     ui_status_keys(sc->str);
     g_string_free(sc, TRUE);
-    GtkTextIter it;
+    JotIter it;
     get_cursor(&it);
     char pos[48];
-    g_snprintf(pos, sizeof pos, "%d,%d", gtk_text_iter_get_line(&it) + 1, gtk_text_iter_get_line_offset(&it) + 1);
+    g_snprintf(pos, sizeof pos, "%d,%d", jb_iter_get_line(&it) + 1, jb_iter_get_line_offset(&it) + 1);
     ui_status_pos(pos);
 }
 
@@ -190,79 +190,79 @@ gboolean vim_image_cursor_mode(void) {
     return V.mode == MODE_NORMAL;
 }
 
-static void set_cursor(GtkTextIter *it) {
+static void set_cursor(JotIter *it) {
     if (is_visual()) {
         clamp_normal(it);
-        gtk_text_buffer_move_mark(J.buf, V.vcur, it);
-        GtkTextIter a, c, s, e;
-        gtk_text_buffer_get_iter_at_mark(J.buf, &a, V.anchor);
-        gtk_text_buffer_get_iter_at_mark(J.buf, &c, V.vcur);
-        gboolean fwd = gtk_text_iter_compare(&c, &a) >= 0;
+        jb_move_mark(J.buf, V.vcur, it);
+        JotIter a, c, s, e;
+        jb_get_iter_at_mark(J.buf, &a, V.anchor);
+        jb_get_iter_at_mark(J.buf, &c, V.vcur);
+        gboolean fwd = jb_iter_compare(&c, &a) >= 0;
         s = fwd ? a : c;
         e = fwd ? c : a;
         if (V.mode == MODE_VISUAL_LINE) {
-            gtk_text_iter_set_line_offset(&s, 0);
+            jb_iter_set_line_offset(&s, 0);
             to_line_end(&e);
-            gtk_text_iter_forward_char(&e);
-        } else if (!gtk_text_iter_is_end(&e)) {
-            gtk_text_iter_forward_char(&e); /* inclusive */
+            jb_iter_forward_char(&e);
+        } else if (!jb_iter_is_end(&e)) {
+            jb_iter_forward_char(&e); /* inclusive */
         }
-        gtk_text_buffer_select_range(J.buf, fwd ? &e : &s, fwd ? &s : &e);
+        jb_select_range(J.buf, fwd ? &e : &s, fwd ? &s : &e);
         ui_scroll_mark_onscreen(V.vcur);
     } else {
         if (V.mode == MODE_NORMAL)
             clamp_normal(it);
-        gtk_text_buffer_place_cursor(J.buf, it);
-        ui_scroll_mark_onscreen(gtk_text_buffer_get_insert(J.buf));
+        jb_place_cursor(J.buf, it);
+        ui_scroll_mark_onscreen(jb_get_insert(J.buf));
     }
     update_status();
 }
 
 static void begin_insert_group(void) {
     if (!V.in_insert_group) {
-        gtk_text_buffer_begin_user_action(J.buf);
+        jb_begin_user_action(J.buf);
         V.in_insert_group = TRUE;
     }
 }
 
-static void enter_insert(GtkTextIter *at) {
+static void enter_insert(JotIter *at) {
     begin_insert_group();
-    gtk_text_buffer_place_cursor(J.buf, at);
+    jb_place_cursor(J.buf, at);
     set_mode(MODE_INSERT);
-    ui_scroll_mark_onscreen(gtk_text_buffer_get_insert(J.buf));
+    ui_scroll_mark_onscreen(jb_get_insert(J.buf));
 }
 
 static void leave_insert(void) {
     if (V.in_insert_group) {
-        gtk_text_buffer_end_user_action(J.buf);
+        jb_end_user_action(J.buf);
         V.in_insert_group = FALSE;
     }
     set_mode(MODE_NORMAL);
-    GtkTextIter it;
+    JotIter it;
     cursor_iter(&it);
-    if (!gtk_text_iter_starts_line(&it))
-        gtk_text_iter_backward_char(&it); /* like vim, Esc steps back onto the last typed char */
+    if (!jb_iter_starts_line(&it))
+        jb_iter_backward_char(&it); /* like vim, Esc steps back onto the last typed char */
     set_cursor(&it);
 }
 
-static void enter_visual(Mode m, const GtkTextIter *anchor, const GtkTextIter *cur) {
+static void enter_visual(Mode m, const JotIter *anchor, const JotIter *cur) {
     if (!V.anchor) {
-        V.anchor = gtk_text_buffer_create_mark(J.buf, NULL, anchor, TRUE);
-        V.vcur = gtk_text_buffer_create_mark(J.buf, NULL, cur, TRUE);
+        V.anchor = jb_create_mark(J.buf, NULL, anchor, TRUE);
+        V.vcur = jb_create_mark(J.buf, NULL, cur, TRUE);
     }
-    gtk_text_buffer_move_mark(J.buf, V.anchor, anchor);
+    jb_move_mark(J.buf, V.anchor, anchor);
     set_mode(m);
-    GtkTextIter c = *cur;
+    JotIter c = *cur;
     set_cursor(&c);
 }
 
 /* Leaves visual mode, putting the cursor at `offset` (or where the visual cursor was if < 0). */
 static void exit_visual(int offset) {
-    GtkTextIter it, a;
-    gtk_text_buffer_get_iter_at_mark(J.buf, &it, V.vcur);
-    gtk_text_buffer_get_iter_at_mark(J.buf, &a, V.anchor);
-    V.vis_first = MIN(gtk_text_iter_get_line(&it), gtk_text_iter_get_line(&a));
-    V.vis_last = MAX(gtk_text_iter_get_line(&it), gtk_text_iter_get_line(&a));
+    JotIter it, a;
+    jb_get_iter_at_mark(J.buf, &it, V.vcur);
+    jb_get_iter_at_mark(J.buf, &a, V.anchor);
+    V.vis_first = MIN(jb_iter_get_line(&it), jb_iter_get_line(&a));
+    V.vis_last = MAX(jb_iter_get_line(&it), jb_iter_get_line(&a));
     if (offset >= 0)
         iter_at(&it, offset);
     set_mode(MODE_NORMAL);
@@ -270,20 +270,20 @@ static void exit_visual(int offset) {
 }
 
 static void visual_range(Range *r) {
-    GtkTextIter a, c;
-    gtk_text_buffer_get_iter_at_mark(J.buf, &a, V.anchor);
-    gtk_text_buffer_get_iter_at_mark(J.buf, &c, V.vcur);
-    if (gtk_text_iter_compare(&a, &c) > 0) {
-        GtkTextIter t = a;
+    JotIter a, c;
+    jb_get_iter_at_mark(J.buf, &a, V.anchor);
+    jb_get_iter_at_mark(J.buf, &c, V.vcur);
+    if (jb_iter_compare(&a, &c) > 0) {
+        JotIter t = a;
         a = c;
         c = t;
     }
     if (V.mode == MODE_VISUAL_LINE) {
-        gtk_text_iter_set_line_offset(&a, 0);
+        jb_iter_set_line_offset(&a, 0);
         to_line_end(&c);
-        gtk_text_iter_forward_char(&c);
-    } else if (!gtk_text_iter_is_end(&c)) {
-        gtk_text_iter_forward_char(&c);
+        jb_iter_forward_char(&c);
+    } else if (!jb_iter_is_end(&c)) {
+        jb_iter_forward_char(&c);
     }
     r->s = offset_of(&a);
     r->e = offset_of(&c);
@@ -295,8 +295,8 @@ static void visual_range(Range *r) {
 /* ------------------------------------------------------------------------- */
 
 /* 0 = blank (incl. newline/end), 1 = punctuation (or image, or any non-blank for WORDs), 2 = word char */
-static int cls_at(const GtkTextIter *it, gboolean big) {
-    gunichar c = gtk_text_iter_get_char(it);
+static int cls_at(const JotIter *it, gboolean big) {
+    gunichar c = jb_iter_get_char(it);
     if (c == 0 || g_unichar_isspace(c))
         return 0;
     if (big)
@@ -304,73 +304,73 @@ static int cls_at(const GtkTextIter *it, gboolean big) {
     return (c == '_' || g_unichar_isalnum(c)) ? 2 : 1;
 }
 
-static gboolean empty_line(const GtkTextIter *it) {
-    return gtk_text_iter_starts_line(it) && gtk_text_iter_ends_line(it);
+static gboolean empty_line(const JotIter *it) {
+    return jb_iter_starts_line(it) && jb_iter_ends_line(it);
 }
 
-static void word_fwd(GtkTextIter *it, gboolean big) {
+static void word_fwd(JotIter *it, gboolean big) {
     int c = cls_at(it, big);
     if (c)
-        while (!gtk_text_iter_is_end(it) && cls_at(it, big) == c)
-            gtk_text_iter_forward_char(it);
-    while (!gtk_text_iter_is_end(it) && cls_at(it, big) == 0) {
-        gboolean nl = gtk_text_iter_get_char(it) == '\n';
-        gtk_text_iter_forward_char(it);
+        while (!jb_iter_is_end(it) && cls_at(it, big) == c)
+            jb_iter_forward_char(it);
+    while (!jb_iter_is_end(it) && cls_at(it, big) == 0) {
+        gboolean nl = jb_iter_get_char(it) == '\n';
+        jb_iter_forward_char(it);
         if (nl && empty_line(it))
             return; /* an empty line counts as a word */
     }
 }
 
-static void word_end(GtkTextIter *it, gboolean big) {
-    gtk_text_iter_forward_char(it);
-    while (!gtk_text_iter_is_end(it) && cls_at(it, big) == 0)
-        gtk_text_iter_forward_char(it);
+static void word_end(JotIter *it, gboolean big) {
+    jb_iter_forward_char(it);
+    while (!jb_iter_is_end(it) && cls_at(it, big) == 0)
+        jb_iter_forward_char(it);
     int c = cls_at(it, big);
     if (!c)
         return;
-    GtkTextIter nx = *it;
-    while (gtk_text_iter_forward_char(&nx) && cls_at(&nx, big) == c)
+    JotIter nx = *it;
+    while (jb_iter_forward_char(&nx) && cls_at(&nx, big) == c)
         *it = nx;
 }
 
-static void word_back(GtkTextIter *it, gboolean big) {
-    if (!gtk_text_iter_backward_char(it))
+static void word_back(JotIter *it, gboolean big) {
+    if (!jb_iter_backward_char(it))
         return;
-    while (cls_at(it, big) == 0 && !gtk_text_iter_is_start(it)) {
+    while (cls_at(it, big) == 0 && !jb_iter_is_start(it)) {
         if (empty_line(it))
             return;
-        gtk_text_iter_backward_char(it);
+        jb_iter_backward_char(it);
     }
     int c = cls_at(it, big);
-    GtkTextIter pv = *it;
-    while (c && gtk_text_iter_backward_char(&pv) && cls_at(&pv, big) == c)
+    JotIter pv = *it;
+    while (c && jb_iter_backward_char(&pv) && cls_at(&pv, big) == c)
         *it = pv;
 }
 
-static gboolean at_word_end(const GtkTextIter *it, gboolean big) {
-    GtkTextIter nx = *it;
-    gtk_text_iter_forward_char(&nx);
+static gboolean at_word_end(const JotIter *it, gboolean big) {
+    JotIter nx = *it;
+    jb_iter_forward_char(&nx);
     return cls_at(&nx, big) != cls_at(it, big);
 }
 
 /* f/F/t/T: n-th occurrence of ch on this line. */
-static gboolean find_char(GtkTextIter *it, gunichar cmd, gunichar ch, int n, gboolean repeat) {
+static gboolean find_char(JotIter *it, gunichar cmd, gunichar ch, int n, gboolean repeat) {
     gboolean fwd = cmd == 'f' || cmd == 't';
     gboolean till = cmd == 't' || cmd == 'T';
-    GtkTextIter t = *it;
+    JotIter t = *it;
     if (till && repeat) /* don't get stuck right before the char we stopped at */
-        fwd ? gtk_text_iter_forward_char(&t) : gtk_text_iter_backward_char(&t);
+        fwd ? jb_iter_forward_char(&t) : jb_iter_backward_char(&t);
     for (int i = 0; i < n; i++) {
         do {
-            if (fwd ? (gtk_text_iter_ends_line(&t) || !gtk_text_iter_forward_char(&t))
-                    : (gtk_text_iter_starts_line(&t) || !gtk_text_iter_backward_char(&t)))
+            if (fwd ? (jb_iter_ends_line(&t) || !jb_iter_forward_char(&t))
+                    : (jb_iter_starts_line(&t) || !jb_iter_backward_char(&t)))
                 return FALSE;
-            if (gtk_text_iter_ends_line(&t) && fwd)
+            if (jb_iter_ends_line(&t) && fwd)
                 return FALSE;
-        } while (gtk_text_iter_get_char(&t) != ch);
+        } while (jb_iter_get_char(&t) != ch);
     }
     if (till)
-        fwd ? gtk_text_iter_backward_char(&t) : gtk_text_iter_forward_char(&t);
+        fwd ? jb_iter_backward_char(&t) : jb_iter_forward_char(&t);
     *it = t;
     return TRUE;
 }
@@ -386,16 +386,16 @@ static gunichar bracket_partner(gunichar c, gboolean *open) {
 }
 
 /* From the bracket at `it`, find its partner (scanning with nesting). */
-static gboolean match_bracket(GtkTextIter *it) {
+static gboolean match_bracket(JotIter *it) {
     gboolean open;
-    gunichar c = gtk_text_iter_get_char(it);
+    gunichar c = jb_iter_get_char(it);
     gunichar partner = bracket_partner(c, &open);
     if (!partner || c == '<' || c == '>')
         return FALSE;
-    GtkTextIter t = *it;
+    JotIter t = *it;
     int depth = 0;
-    while (open ? gtk_text_iter_forward_char(&t) : gtk_text_iter_backward_char(&t)) {
-        gunichar d = gtk_text_iter_get_char(&t);
+    while (open ? jb_iter_forward_char(&t) : jb_iter_backward_char(&t)) {
+        gunichar d = jb_iter_get_char(&t);
         if (d == c)
             depth++;
         else if (d == partner && depth-- == 0) {
@@ -407,13 +407,13 @@ static gboolean match_bracket(GtkTextIter *it) {
 }
 
 /* The unmatched `open` bracket enclosing `it` (or at it). */
-static gboolean enclosing_open(GtkTextIter *it, gunichar open, gunichar close) {
-    if (gtk_text_iter_get_char(it) == open)
+static gboolean enclosing_open(JotIter *it, gunichar open, gunichar close) {
+    if (jb_iter_get_char(it) == open)
         return TRUE;
-    GtkTextIter t = *it;
+    JotIter t = *it;
     int depth = 0;
-    while (gtk_text_iter_backward_char(&t)) {
-        gunichar d = gtk_text_iter_get_char(&t);
+    while (jb_iter_backward_char(&t)) {
+        gunichar d = jb_iter_get_char(&t);
         if (d == close)
             depth++;
         else if (d == open && depth-- == 0) {
@@ -429,13 +429,13 @@ static gboolean enclosing_open(GtkTextIter *it, gunichar open, gunichar close) {
 /* ------------------------------------------------------------------------- */
 
 /* count-th match of q after (forward) or before `start`. */
-static gboolean do_search(const char *q, gboolean fwd, int count, const GtkTextIter *start, Match *m) {
-    GtkTextIter from = *start;
+static gboolean do_search(const char *q, gboolean fwd, int count, const JotIter *start, Match *m) {
+    JotIter from = *start;
     gboolean wrapped = FALSE;
     for (int i = 0; i < MAX(count, 1); i++) {
-        GtkTextIter f = from;
-        if (fwd && !gtk_text_iter_is_end(&f))
-            gtk_text_iter_forward_char(&f);
+        JotIter f = from;
+        if (fwd && !jb_iter_is_end(&f))
+            jb_iter_forward_char(&f);
         if (i)
             g_clear_pointer(&m->line, g_free);
         if (!find_match(q, smartcase(q), &f, fwd, m))
@@ -454,15 +454,15 @@ static gboolean do_search(const char *q, gboolean fwd, int count, const GtkTextI
 static void clear_image_mark(void) {
     if (V.hl_image) {
         image_set_highlight(V.hl_image, NULL);
-        g_clear_object(&V.hl_image);
+        g_clear_pointer(&V.hl_image, jot_image_unref);
     }
 }
 
 /* The cursor goes on the image (which outlines it); the matching words get highlighted. */
-static void mark_image(JotImage *img, const GtkTextIter *at, const char *q) {
+static void mark_image(JotImage *img, const JotIter *at, const char *q) {
     clear_image_mark();
-    gtk_text_buffer_place_cursor(J.buf, at);
-    V.hl_image = g_object_ref(img);
+    jb_place_cursor(J.buf, at);
+    V.hl_image = jot_image_ref(img);
     image_set_highlight(img, q);
 }
 
@@ -473,9 +473,9 @@ static void show_match(Match *m, const char *q) {
         if (m->img)
             mark_image(m->img, &m->start, q);
         else
-            gtk_text_buffer_select_range(J.buf, &m->start, &m->end);
+            jb_select_range(J.buf, &m->start, &m->end);
         V.search_hl = TRUE;
-        ui_scroll_mark_onscreen(gtk_text_buffer_get_insert(J.buf));
+        ui_scroll_mark_onscreen(jb_get_insert(J.buf));
         update_status();
     }
     ui_scroll_iter_onscreen(&m->start);
@@ -497,7 +497,7 @@ static void search_jump(gboolean fwd, int count) {
         vim_message("E35: No previous regular expression", TRUE);
         return;
     }
-    GtkTextIter cur;
+    JotIter cur;
     get_cursor(&cur);
     Match m = {0};
     if (!do_search(V.last_search, fwd, count, &cur, &m)) {
@@ -515,19 +515,19 @@ static void search_jump(gboolean fwd, int count) {
 
 /* The word (or WORD-ish non-blank run) under the cursor, for * and #. */
 static char *word_under_cursor(void) {
-    GtkTextIter s, e;
+    JotIter s, e;
     get_cursor(&s);
-    while (!gtk_text_iter_ends_line(&s) && cls_at(&s, FALSE) != 2)
-        gtk_text_iter_forward_char(&s);
+    while (!jb_iter_ends_line(&s) && cls_at(&s, FALSE) != 2)
+        jb_iter_forward_char(&s);
     if (cls_at(&s, FALSE) != 2)
         return NULL;
     e = s;
-    GtkTextIter pv = s;
-    while (gtk_text_iter_backward_char(&pv) && cls_at(&pv, FALSE) == 2)
+    JotIter pv = s;
+    while (jb_iter_backward_char(&pv) && cls_at(&pv, FALSE) == 2)
         s = pv;
-    while (!gtk_text_iter_ends_line(&e) && cls_at(&e, FALSE) == 2)
-        gtk_text_iter_forward_char(&e);
-    return gtk_text_buffer_get_text(J.buf, &s, &e, FALSE);
+    while (!jb_iter_ends_line(&e) && cls_at(&e, FALSE) == 2)
+        jb_iter_forward_char(&e);
+    return jb_get_text(J.buf, &s, &e, FALSE);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -536,24 +536,24 @@ static char *word_under_cursor(void) {
 
 /* Moves `it` by the motion at *pp. `count` is 0 when none was typed. `op` is the pending
  * operator (d, c, y, <, >) or 0. */
-static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Motion *mi) {
+static Res motion(const char **pp, int count, gunichar op, JotIter *it, Motion *mi) {
     const char *p = *pp;
     if (!*p)
         return R_MORE;
     gunichar c = next_char(&p);
     int n = MAX(count, 1);
-    GtkTextIter start = *it;
+    JotIter start = *it;
     memset(mi, 0, sizeof *mi);
     switch (c) {
     case 'h':
     case K_BS: /* also Ctrl+H */
-        for (int i = 0; i < n && !gtk_text_iter_starts_line(it); i++)
-            gtk_text_iter_backward_char(it);
+        for (int i = 0; i < n && !jb_iter_starts_line(it); i++)
+            jb_iter_backward_char(it);
         break;
     case 'l':
     case ' ':
-        for (int i = 0; i < n && !gtk_text_iter_ends_line(it); i++)
-            gtk_text_iter_forward_char(it);
+        for (int i = 0; i < n && !jb_iter_ends_line(it); i++)
+            jb_iter_forward_char(it);
         break;
     case 'j':
     case 'k':
@@ -564,13 +564,13 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
     case K_CR:
     case '_': {
         int dir = (c == 'k' || c == '-' || c == CTRL('p')) ? -1 : 1;
-        int cur = gtk_text_iter_get_line(it);
+        int cur = jb_iter_get_line(it);
         int line = c == '_' ? cur + n - 1 : cur + dir * n;
         if (line < 0 || line >= line_count())
             return R_BAD;
         if (c == 'j' || c == 'k' || c == CTRL('n') || c == CTRL('p')) {
             if (V.want_col < 0)
-                V.want_col = gtk_text_iter_get_line_offset(it);
+                V.want_col = jb_iter_get_line_offset(it);
             iter_line_col(it, line, V.want_col);
             mi->jk = TRUE;
         } else {
@@ -581,17 +581,17 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
         break;
     }
     case '0':
-        gtk_text_iter_set_line_offset(it, 0);
+        jb_iter_set_line_offset(it, 0);
         break;
     case '^':
         first_nonblank(it);
         break;
     case '$':
         if (n > 1)
-            iter_line(it, gtk_text_iter_get_line(it) + n - 1);
+            iter_line(it, jb_iter_get_line(it) + n - 1);
         to_line_end(it);
-        if (!gtk_text_iter_starts_line(it)) {
-            gtk_text_iter_backward_char(it);
+        if (!jb_iter_starts_line(it)) {
+            jb_iter_backward_char(it);
             mi->inclusive = TRUE;
         }
         mi->dollar = TRUE;
@@ -601,9 +601,9 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
         for (int i = 0; i < n; i++)
             word_fwd(it, c == 'W');
         /* dw on the last word of a line stops at the line end, not the next line's word. */
-        if (op && gtk_text_iter_get_line(it) > gtk_text_iter_get_line(&start) && gtk_text_iter_starts_line(it) &&
-            !gtk_text_iter_is_end(it))
-            gtk_text_iter_backward_char(it);
+        if (op && jb_iter_get_line(it) > jb_iter_get_line(&start) && jb_iter_starts_line(it) &&
+            !jb_iter_is_end(it))
+            jb_iter_backward_char(it);
         break;
     case 'e':
     case 'E':
@@ -635,10 +635,10 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
             if (r != R_DONE)
                 return r;
         } else if (d == '_') {
-            iter_line(it, gtk_text_iter_get_line(it) + n - 1);
+            iter_line(it, jb_iter_get_line(it) + n - 1);
             to_line_end(it);
-            while (!gtk_text_iter_starts_line(it)) {
-                gtk_text_iter_backward_char(it);
+            while (!jb_iter_starts_line(it)) {
+                jb_iter_backward_char(it);
                 if (cls_at(it, TRUE))
                     break;
             }
@@ -678,7 +678,7 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
     case '{': {
         gboolean fwd = c == '}';
         for (int i = 0; i < n; i++) {
-            int line = gtk_text_iter_get_line(it), last = line_count() - 1;
+            int line = jb_iter_get_line(it), last = line_count() - 1;
             /* skip blank lines we're on, then find the next blank line */
             while ((fwd ? line < last : line > 0) && line_length(line) == 0)
                 line += fwd ? 1 : -1;
@@ -697,13 +697,13 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
         if (next_char(&p) != c)
             return R_BAD;
         for (int i = 0; i < n; i++) {
-            int line = md_heading_line(gtk_text_iter_get_line(it), c == ']' ? 1 : -1);
+            int line = md_heading_line(jb_iter_get_line(it), c == ']' ? 1 : -1);
             if (line < 0) { /* none: like vim, go to the end / start */
                 if (c == ']')
-                    gtk_text_buffer_get_end_iter(J.buf, it);
+                    jb_get_end_iter(J.buf, it);
                 else
-                    gtk_text_buffer_get_start_iter(J.buf, it);
-                gtk_text_iter_set_line_offset(it, 0);
+                    jb_get_start_iter(J.buf, it);
+                jb_iter_set_line_offset(it, 0);
                 break;
             }
             iter_line(it, line);
@@ -711,10 +711,10 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
         break;
     }
     case '%': {
-        GtkTextIter t = *it;
+        JotIter t = *it;
         gboolean open;
-        while (!gtk_text_iter_ends_line(&t) && !bracket_partner(gtk_text_iter_get_char(&t), &open))
-            gtk_text_iter_forward_char(&t);
+        while (!jb_iter_ends_line(&t) && !bracket_partner(jb_iter_get_char(&t), &open))
+            jb_iter_forward_char(&t);
         if (!match_bracket(&t))
             return R_BAD;
         *it = t;
@@ -750,18 +750,18 @@ static Res motion(const char **pp, int count, gunichar op, GtkTextIter *it, Moti
     return R_DONE;
 }
 
-static void make_range(GtkTextIter a, GtkTextIter b, const Motion *mi, Range *r) {
-    if (gtk_text_iter_compare(&a, &b) > 0) {
-        GtkTextIter t = a;
+static void make_range(JotIter a, JotIter b, const Motion *mi, Range *r) {
+    if (jb_iter_compare(&a, &b) > 0) {
+        JotIter t = a;
         a = b;
         b = t;
     }
     if (mi->linewise) {
-        gtk_text_iter_set_line_offset(&a, 0);
+        jb_iter_set_line_offset(&a, 0);
         to_line_end(&b);
-        gtk_text_iter_forward_char(&b); /* the newline (no-op at the end) */
-    } else if (mi->inclusive && !gtk_text_iter_is_end(&b)) {
-        gtk_text_iter_forward_char(&b);
+        jb_iter_forward_char(&b); /* the newline (no-op at the end) */
+    } else if (mi->inclusive && !jb_iter_is_end(&b)) {
+        jb_iter_forward_char(&b);
     }
     r->s = offset_of(&a);
     r->e = offset_of(&b);
@@ -770,11 +770,11 @@ static void make_range(GtkTextIter a, GtkTextIter b, const Motion *mi, Range *r)
 
 /* Chars of the cursor's line, for quote objects. */
 static gunichar *line_chars(int line, glong *len) {
-    GtkTextIter s, e;
+    JotIter s, e;
     iter_line(&s, line);
     e = s;
     to_line_end(&e);
-    g_autofree char *text = gtk_text_buffer_get_slice(J.buf, &s, &e, TRUE);
+    g_autofree char *text = jb_get_slice(J.buf, &s, &e, TRUE);
     return g_utf8_to_ucs4_fast(text, -1, len);
 }
 
@@ -783,7 +783,7 @@ static Res text_object(const char **pp, gunichar ia, Range *r) {
     if (!**pp)
         return R_MORE;
     gunichar o = next_char(pp);
-    GtkTextIter cur, s, e;
+    JotIter cur, s, e;
     get_cursor(&cur);
     s = e = cur;
     r->linewise = FALSE;
@@ -794,28 +794,28 @@ static Res text_object(const char **pp, gunichar ia, Range *r) {
         if (empty_line(&cur))
             return R_BAD;
         int c = cls_at(&cur, big);
-        GtkTextIter pv = s;
-        while (!gtk_text_iter_starts_line(&s) && gtk_text_iter_backward_char(&pv) && cls_at(&pv, big) == c &&
-               gtk_text_iter_get_char(&pv) != '\n')
+        JotIter pv = s;
+        while (!jb_iter_starts_line(&s) && jb_iter_backward_char(&pv) && cls_at(&pv, big) == c &&
+               jb_iter_get_char(&pv) != '\n')
             s = pv;
-        while (!gtk_text_iter_ends_line(&e) && cls_at(&e, big) == c)
-            gtk_text_iter_forward_char(&e);
+        while (!jb_iter_ends_line(&e) && cls_at(&e, big) == c)
+            jb_iter_forward_char(&e);
         if (ia == 'a') {
             if (c) { /* plus trailing blanks, or leading ones if there are none */
-                GtkTextIter t = e;
-                while (!gtk_text_iter_ends_line(&t) && cls_at(&t, big) == 0)
-                    gtk_text_iter_forward_char(&t);
-                if (!gtk_text_iter_equal(&t, &e)) {
+                JotIter t = e;
+                while (!jb_iter_ends_line(&t) && cls_at(&t, big) == 0)
+                    jb_iter_forward_char(&t);
+                if (!jb_iter_equal(&t, &e)) {
                     e = t;
                 } else {
                     pv = s;
-                    while (!gtk_text_iter_starts_line(&s) && gtk_text_iter_backward_char(&pv) && cls_at(&pv, big) == 0)
+                    while (!jb_iter_starts_line(&s) && jb_iter_backward_char(&pv) && cls_at(&pv, big) == 0)
                         s = pv;
                 }
             } else { /* blanks plus the following word */
                 int c2 = cls_at(&e, big);
-                while (c2 && !gtk_text_iter_ends_line(&e) && cls_at(&e, big) == c2)
-                    gtk_text_iter_forward_char(&e);
+                while (c2 && !jb_iter_ends_line(&e) && cls_at(&e, big) == c2)
+                    jb_iter_forward_char(&e);
             }
         }
         break;
@@ -824,8 +824,8 @@ static Res text_object(const char **pp, gunichar ia, Range *r) {
     case '\'':
     case '`': {
         glong len;
-        g_autofree gunichar *chars = line_chars(gtk_text_iter_get_line(&cur), &len);
-        int col = gtk_text_iter_get_line_offset(&cur), qa = -1, qb = -1;
+        g_autofree gunichar *chars = line_chars(jb_iter_get_line(&cur), &len);
+        int col = jb_iter_get_line_offset(&cur), qa = -1, qb = -1;
         int pos[512], np = 0;
         for (glong i = 0; i < len && np < 512; i++)
             if (chars[i] == o && (i == 0 || chars[i - 1] != '\\'))
@@ -839,8 +839,8 @@ static Res text_object(const char **pp, gunichar ia, Range *r) {
         }
         if (qa < 0)
             return R_BAD;
-        gtk_text_iter_set_line_offset(&s, ia == 'i' ? qa + 1 : qa);
-        gtk_text_iter_set_line_offset(&e, ia == 'i' ? qb : qb + 1);
+        jb_iter_set_line_offset(&s, ia == 'i' ? qa + 1 : qa);
+        jb_iter_set_line_offset(&e, ia == 'i' ? qb : qb + 1);
         break;
     }
     case '(':
@@ -864,8 +864,8 @@ static Res text_object(const char **pp, gunichar ia, Range *r) {
         e = s;
         int depth = 0;
         gboolean found = FALSE;
-        while (gtk_text_iter_forward_char(&e)) {
-            gunichar d = gtk_text_iter_get_char(&e);
+        while (jb_iter_forward_char(&e)) {
+            gunichar d = jb_iter_get_char(&e);
             if (d == open)
                 depth++;
             else if (d == close && depth-- == 0) {
@@ -876,13 +876,13 @@ static Res text_object(const char **pp, gunichar ia, Range *r) {
         if (!found)
             return R_BAD;
         if (ia == 'i')
-            gtk_text_iter_forward_char(&s);
+            jb_iter_forward_char(&s);
         else
-            gtk_text_iter_forward_char(&e);
+            jb_iter_forward_char(&e);
         break;
     }
     case 'p': {
-        int line = gtk_text_iter_get_line(&cur), first = line, last = line;
+        int line = jb_iter_get_line(&cur), first = line, last = line;
         gboolean blank = line_length(line) == 0;
         while (first > 0 && (line_length(first - 1) == 0) == blank)
             first--;
@@ -894,7 +894,7 @@ static Res text_object(const char **pp, gunichar ia, Range *r) {
         iter_line(&s, first);
         iter_line(&e, last);
         to_line_end(&e);
-        gtk_text_iter_forward_char(&e);
+        jb_iter_forward_char(&e);
         r->linewise = TRUE;
         break;
     }
@@ -911,7 +911,7 @@ static Res text_object(const char **pp, gunichar ia, Range *r) {
 /* ------------------------------------------------------------------------- */
 
 static void yank_range(const Range *r) {
-    GtkTextIter s, e;
+    JotIter s, e;
     iter_at(&s, r->s);
     iter_at(&e, r->e);
     char *text = serialize_range(J.buf, &s, &e);
@@ -923,35 +923,35 @@ static void yank_range(const Range *r) {
     g_free(V.reg);
     V.reg = text;
     V.reg_linewise = r->linewise;
-    GdkPaintable *p = gtk_text_iter_get_paintable(&s);
-    gboolean lone = JOT_IS_IMAGE(p) && r->e - r->s <= (r->linewise ? 2 : 1);
-    clipboard_set(text, lone ? JOT_IMAGE(p) : NULL);
+    JotImage *p = jb_iter_get_image(&s);
+    gboolean lone = p && r->e - r->s <= (r->linewise ? 2 : 1);
+    clipboard_set(text, lone ? p : NULL);
 }
 
 static void delete_range(const Range *r, gboolean yank) {
     if (yank)
         yank_range(r);
-    GtkTextIter s, e;
+    JotIter s, e;
     iter_at(&s, r->s);
     iter_at(&e, r->e);
     /* Deleting the last lines also takes the newline before them. */
-    if (r->linewise && gtk_text_iter_is_end(&e) && !gtk_text_iter_is_start(&s) && !gtk_text_iter_starts_line(&e))
-        gtk_text_iter_backward_char(&s);
-    else if (r->linewise && gtk_text_iter_is_end(&e) && !gtk_text_iter_is_start(&s) &&
-             gtk_text_iter_get_char(&e) == 0 && r->e > r->s) {
-        GtkTextIter pv = e;
-        gtk_text_iter_backward_char(&pv);
-        if (gtk_text_iter_get_char(&pv) != '\n')
-            gtk_text_iter_backward_char(&s);
+    if (r->linewise && jb_iter_is_end(&e) && !jb_iter_is_start(&s) && !jb_iter_starts_line(&e))
+        jb_iter_backward_char(&s);
+    else if (r->linewise && jb_iter_is_end(&e) && !jb_iter_is_start(&s) &&
+             jb_iter_get_char(&e) == 0 && r->e > r->s) {
+        JotIter pv = e;
+        jb_iter_backward_char(&pv);
+        if (jb_iter_get_char(&pv) != '\n')
+            jb_iter_backward_char(&s);
     }
-    gtk_text_buffer_delete(J.buf, &s, &e);
+    jb_delete(J.buf, &s, &e);
 }
 
 static void set_case(const Range *r, gunichar how) {
-    GtkTextIter s, e;
+    JotIter s, e;
     iter_at(&s, r->s);
     iter_at(&e, r->e);
-    g_autofree char *text = gtk_text_buffer_get_slice(J.buf, &s, &e, TRUE);
+    g_autofree char *text = jb_get_slice(J.buf, &s, &e, TRUE);
     if (strstr(text, OBJ_UTF8))
         return;
     GString *out = g_string_new(NULL);
@@ -965,30 +965,30 @@ static void set_case(const Range *r, gunichar how) {
             c = g_unichar_isupper(c) ? g_unichar_tolower(c) : g_unichar_toupper(c);
         g_string_append_unichar(out, c);
     }
-    gtk_text_buffer_begin_user_action(J.buf);
-    gtk_text_buffer_delete(J.buf, &s, &e);
-    gtk_text_buffer_insert(J.buf, &s, out->str, (int)out->len);
-    gtk_text_buffer_end_user_action(J.buf);
+    jb_begin_user_action(J.buf);
+    jb_delete(J.buf, &s, &e);
+    jb_insert(J.buf, &s, out->str, (int)out->len);
+    jb_end_user_action(J.buf);
     g_string_free(out, TRUE);
 }
 
 static void apply_op(gunichar op, Range *r) {
-    GtkTextIter it, s, e;
+    JotIter it, s, e;
     iter_at(&s, r->s);
     iter_at(&e, r->e);
-    int first = gtk_text_iter_get_line(&s);
-    int last = gtk_text_iter_get_line(&e);
-    if (r->e > r->s && gtk_text_iter_starts_line(&e) && last > first)
+    int first = jb_iter_get_line(&s);
+    int last = jb_iter_get_line(&e);
+    if (r->e > r->s && jb_iter_starts_line(&e) && last > first)
         last--;
     switch (op) {
     case 'y': {
         yank_range(r);
-        GtkTextIter cur;
+        JotIter cur;
         get_cursor(&cur);
-        if (!r->linewise || gtk_text_iter_get_line(&cur) > first) {
+        if (!r->linewise || jb_iter_get_line(&cur) > first) {
             it = s;
             if (r->linewise)
-                iter_line_col(&it, first, gtk_text_iter_get_line_offset(&cur));
+                iter_line_col(&it, first, jb_iter_get_line_offset(&cur));
             set_cursor(&it);
         }
         if (r->linewise && last > first + 1) {
@@ -998,9 +998,9 @@ static void apply_op(gunichar op, Range *r) {
         break;
     }
     case 'd':
-        gtk_text_buffer_begin_user_action(J.buf);
+        jb_begin_user_action(J.buf);
         delete_range(r, TRUE);
-        gtk_text_buffer_end_user_action(J.buf);
+        jb_end_user_action(J.buf);
         if (r->linewise) {
             iter_line(&it, first);
             first_nonblank(&it);
@@ -1054,19 +1054,19 @@ static void put_text(PutReq *pr, const char *text, gboolean linewise) {
     GString *t = g_string_new(NULL);
     for (int i = 0; i < MAX(pr->count, 1); i++)
         g_string_append(t, text);
-    gtk_text_buffer_begin_user_action(J.buf);
-    GtkTextIter cur, at;
+    jb_begin_user_action(J.buf);
+    JotIter cur, at;
     if (pr->replace_s >= 0) {
         Range r = {pr->replace_s, pr->replace_e, pr->replace_linewise};
         delete_range(&r, FALSE);
-        iter_at(&cur, MIN(pr->replace_s, gtk_text_buffer_get_char_count(J.buf)));
+        iter_at(&cur, MIN(pr->replace_s, jb_get_char_count(J.buf)));
         if (pr->replace_linewise && !linewise)
             g_string_append_c(t, '\n');
-        if (!pr->replace_linewise && linewise && !gtk_text_iter_starts_line(&cur))
+        if (!pr->replace_linewise && linewise && !jb_iter_starts_line(&cur))
             g_string_prepend_c(t, '\n');
         linewise = linewise || pr->replace_linewise;
-        if (pr->replace_linewise && !gtk_text_iter_starts_line(&cur)) {
-            gtk_text_buffer_insert(J.buf, &cur, "\n", 1);
+        if (pr->replace_linewise && !jb_iter_starts_line(&cur)) {
+            jb_insert(J.buf, &cur, "\n", 1);
             if (g_str_has_suffix(t->str, "\n"))
                 g_string_truncate(t, t->len - 1);
         }
@@ -1082,13 +1082,13 @@ static void put_text(PutReq *pr, const char *text, gboolean linewise) {
         get_cursor(&cur);
         at = cur;
         if (pr->after) {
-            if (!gtk_text_iter_forward_line(&at) && !gtk_text_iter_starts_line(&at)) {
+            if (!jb_iter_forward_line(&at) && !jb_iter_starts_line(&at)) {
                 /* after the last line, which has no newline yet */
-                gtk_text_buffer_insert(J.buf, &at, "\n", 1);
+                jb_insert(J.buf, &at, "\n", 1);
                 g_string_truncate(t, t->len - 1);
             }
         } else {
-            gtk_text_iter_set_line_offset(&at, 0);
+            jb_iter_set_line_offset(&at, 0);
         }
         int off = offset_of(&at);
         insert_text(J.buf, &at, t->str);
@@ -1096,13 +1096,13 @@ static void put_text(PutReq *pr, const char *text, gboolean linewise) {
         first_nonblank(&cur);
     } else {
         get_cursor(&at);
-        if (pr->after && !gtk_text_iter_ends_line(&at))
-            gtk_text_iter_forward_char(&at);
+        if (pr->after && !jb_iter_ends_line(&at))
+            jb_iter_forward_char(&at);
         insert_text(J.buf, &at, t->str);
         cur = at;
-        gtk_text_iter_backward_char(&cur);
+        jb_iter_backward_char(&cur);
     }
-    gtk_text_buffer_end_user_action(J.buf);
+    jb_end_user_action(J.buf);
     if (is_visual())
         exit_visual(offset_of(&cur));
     else
@@ -1125,25 +1125,25 @@ void vim_put_image(void *request, char *rel) {
     if (rel) {
         if (pr->replace_s >= 0) {
             Range r = {pr->replace_s, pr->replace_e, pr->replace_linewise};
-            gtk_text_buffer_begin_user_action(J.buf);
+            jb_begin_user_action(J.buf);
             delete_range(&r, FALSE);
-            gtk_text_buffer_end_user_action(J.buf);
-            exit_visual(MIN(pr->replace_s, gtk_text_buffer_get_char_count(J.buf)));
+            jb_end_user_action(J.buf);
+            exit_visual(MIN(pr->replace_s, jb_get_char_count(J.buf)));
         }
         /* Images are line-level: put it on its own line below (p) or above (P). */
-        GtkTextIter at;
+        JotIter at;
         cursor_iter(&at);
         if (pr->after && pr->replace_s < 0) {
-            if (!gtk_text_iter_forward_line(&at))
-                gtk_text_buffer_get_end_iter(J.buf, &at);
+            if (!jb_iter_forward_line(&at))
+                jb_get_end_iter(J.buf, &at);
         } else {
-            gtk_text_iter_set_line_offset(&at, 0);
+            jb_iter_set_line_offset(&at, 0);
         }
         g_autoptr(GPtrArray) rels = g_ptr_array_new_with_free_func(g_free);
         for (int i = 0; i < MAX(pr->count, 1); i++)
             g_ptr_array_add(rels, g_strdup(rel));
         insert_images(rels, &at);
-        GtkTextIter it;
+        JotIter it;
         cursor_iter(&it);
         set_cursor(&it);
         g_free(rel);
@@ -1178,25 +1178,25 @@ static void put(gboolean after, int count) {
 /* ------------------------------------------------------------------------- */
 
 static void open_line(gboolean below) {
-    GtkTextIter it, ls;
+    JotIter it, ls;
     cursor_iter(&it);
     ls = it;
     first_nonblank(&ls);
-    GtkTextIter l0 = ls;
-    gtk_text_iter_set_line_offset(&l0, 0);
-    g_autofree char *indent = gtk_text_buffer_get_text(J.buf, &l0, &ls, FALSE);
-    if (gtk_text_iter_get_char(&ls) == 0xFFFC)
+    JotIter l0 = ls;
+    jb_iter_set_line_offset(&l0, 0);
+    g_autofree char *indent = jb_get_text(J.buf, &l0, &ls, FALSE);
+    if (jb_iter_get_char(&ls) == 0xFFFC)
         indent[0] = '\0';
     begin_insert_group();
     if (below) {
         to_line_end(&it);
         g_autofree char *ins = g_strconcat("\n", indent, NULL);
-        gtk_text_buffer_insert(J.buf, &it, ins, -1);
+        jb_insert(J.buf, &it, ins, -1);
     } else {
-        gtk_text_iter_set_line_offset(&it, 0);
+        jb_iter_set_line_offset(&it, 0);
         g_autofree char *ins = g_strconcat(indent, "\n", NULL);
-        gtk_text_buffer_insert(J.buf, &it, ins, -1);
-        gtk_text_iter_backward_char(&it);
+        jb_insert(J.buf, &it, ins, -1);
+        jb_iter_backward_char(&it);
     }
     enter_insert(&it);
 }
@@ -1205,27 +1205,27 @@ static void open_line(gboolean below) {
 static gboolean join_lines(int line, int joins) {
     gboolean any = FALSE;
     int join_at = 0;
-    gtk_text_buffer_begin_user_action(J.buf);
-    GtkTextIter e;
+    jb_begin_user_action(J.buf);
+    JotIter e;
     for (int i = 0; i < joins && line < line_count() - 1; i++) {
         iter_line(&e, line);
         to_line_end(&e);
-        GtkTextIter t = e;
-        gtk_text_iter_forward_char(&t);
-        while (!gtk_text_iter_ends_line(&t) && (gtk_text_iter_get_char(&t) == ' ' || gtk_text_iter_get_char(&t) == '\t'))
-            gtk_text_iter_forward_char(&t);
-        gboolean space = !gtk_text_iter_starts_line(&e) && !gtk_text_iter_ends_line(&t) &&
-                         gtk_text_iter_get_char(&t) != ')';
-        GtkTextIter pv = e;
-        if (space && gtk_text_iter_backward_char(&pv) && g_unichar_isspace(gtk_text_iter_get_char(&pv)))
+        JotIter t = e;
+        jb_iter_forward_char(&t);
+        while (!jb_iter_ends_line(&t) && (jb_iter_get_char(&t) == ' ' || jb_iter_get_char(&t) == '\t'))
+            jb_iter_forward_char(&t);
+        gboolean space = !jb_iter_starts_line(&e) && !jb_iter_ends_line(&t) &&
+                         jb_iter_get_char(&t) != ')';
+        JotIter pv = e;
+        if (space && jb_iter_backward_char(&pv) && g_unichar_isspace(jb_iter_get_char(&pv)))
             space = FALSE;
-        gtk_text_buffer_delete(J.buf, &e, &t);
+        jb_delete(J.buf, &e, &t);
         join_at = offset_of(&e); /* the cursor ends up at the (last) join */
         if (space)
-            gtk_text_buffer_insert(J.buf, &e, " ", 1);
+            jb_insert(J.buf, &e, " ", 1);
         any = TRUE;
     }
-    gtk_text_buffer_end_user_action(J.buf);
+    jb_end_user_action(J.buf);
     if (any) {
         iter_at(&e, join_at);
         set_cursor(&e);
@@ -1239,21 +1239,21 @@ static void page_move(int dir, gboolean half, int count) {
     ui_visible_lines(&top, &bot);
     int page = MAX(1, bot - top);
     int lines = (half ? MAX(1, page / 2) : MAX(1, page - 2)) * MAX(count, 1);
-    GtkTextIter cur;
+    JotIter cur;
     get_cursor(&cur);
     double rel = ui_iter_screen_pos(&cur);
     if (V.want_col < 0)
-        V.want_col = gtk_text_iter_get_line_offset(&cur);
-    int line = CLAMP(gtk_text_iter_get_line(&cur) + dir * lines, 0, line_count() - 1);
-    GtkTextIter it;
+        V.want_col = jb_iter_get_line_offset(&cur);
+    int line = CLAMP(jb_iter_get_line(&cur) + dir * lines, 0, line_count() - 1);
+    JotIter it;
     iter_line_col(&it, line, V.want_col);
     set_cursor(&it);
-    GtkTextMark *m = is_visual() ? V.vcur : gtk_text_buffer_get_insert(J.buf);
+    JotMark *m = is_visual() ? V.vcur : jb_get_insert(J.buf);
     ui_scroll_mark_to(m, half ? rel : (dir > 0 ? 0.0 : 1.0));
 }
 
 static void scroll_lines(int dir, int count) {
-    GtkTextIter cur;
+    JotIter cur;
     get_cursor(&cur);
     ui_scroll_lines(&cur, dir, count);
 }
@@ -1266,7 +1266,7 @@ static void cmdline_open(gunichar kind, const char *prefill) {
     V.cmd_kind = kind;
     char pre[8] = {0};
     g_unichar_to_utf8(kind, pre);
-    GtkTextIter it;
+    JotIter it;
     get_cursor(&it);
     V.search_origin = offset_of(&it);
     V.hist_pos = V.history->len;
@@ -1280,12 +1280,12 @@ static void cmdline_close(void) {
 
 static void restore_origin(void) {
     clear_image_mark();
-    GtkTextIter it;
+    JotIter it;
     iter_at(&it, V.search_origin);
     if (is_visual())
         set_cursor(&it);
     else
-        gtk_text_buffer_place_cursor(J.buf, &it);
+        jb_place_cursor(J.buf, &it);
 }
 
 static void cmdline_cancel(void) {
@@ -1299,7 +1299,7 @@ void vim_cmd_changed(void) {
     if (V.cmd_kind == ':' || !ui_cmd_is_open())
         return;
     const char *q = ui_cmd_text();
-    GtkTextIter from;
+    JotIter from;
     iter_at(&from, V.search_origin);
     Match m = {0};
     if (*q && do_search(q, V.cmd_kind == '/', 1, &from, &m)) {
@@ -1309,7 +1309,7 @@ void vim_cmd_changed(void) {
         else if (m.img)
             mark_image(m.img, &m.start, q);
         else
-            gtk_text_buffer_select_range(J.buf, &m.start, &m.end);
+            jb_select_range(J.buf, &m.start, &m.end);
         ui_scroll_iter_onscreen(&m.start);
         g_free(m.line);
     } else {
@@ -1385,12 +1385,12 @@ gboolean vim_cmd_key(JotKey key, gunichar ch, gboolean ctrl) {
 
 static gboolean parse_addr(const char **pp, int *line) {
     const char *p = *pp;
-    GtkTextIter cur;
+    JotIter cur;
     get_cursor(&cur);
     if (g_ascii_isdigit(*p)) {
         *line = (int)strtol(p, (char **)&p, 10) - 1;
     } else if (*p == '.') {
-        *line = gtk_text_iter_get_line(&cur);
+        *line = jb_iter_get_line(&cur);
         p++;
     } else if (*p == '$') {
         *line = line_count() - 1;
@@ -1401,7 +1401,7 @@ static gboolean parse_addr(const char **pp, int *line) {
     } else if (*p != '+' && *p != '-') {
         return FALSE;
     } else {
-        *line = gtk_text_iter_get_line(&cur);
+        *line = jb_iter_get_line(&cur);
     }
     while (*p == '+' || *p == '-') {
         int sign = *p++ == '+' ? 1 : -1;
@@ -1415,9 +1415,9 @@ static gboolean parse_addr(const char **pp, int *line) {
 /* [range]: % | addr | addr,addr. Returns whether one was given. */
 static gboolean parse_range(const char **pp, int *first, int *last) {
     const char *p = *pp;
-    GtkTextIter cur;
+    JotIter cur;
     get_cursor(&cur);
-    *first = *last = gtk_text_iter_get_line(&cur);
+    *first = *last = jb_iter_get_line(&cur);
     gboolean given = FALSE;
     if (*p == '%') {
         *first = 0;
@@ -1523,20 +1523,20 @@ static void substitute(const char *pat, const char *vim_rep, const char *flags, 
     g_autofree char *rep = vim_to_replacement(vim_rep);
     SubCtx ctx = {rep, strchr(flags, 'g') != NULL, 0};
     int lines_changed = 0, last_changed = -1;
-    gtk_text_buffer_begin_user_action(J.buf);
+    jb_begin_user_action(J.buf);
     for (int line = first; line <= last; line++) {
-        GtkTextIter s, e;
+        JotIter s, e;
         iter_line(&s, line);
         e = s;
         to_line_end(&e);
-        g_autofree char *text = gtk_text_buffer_get_slice(J.buf, &s, &e, TRUE);
+        g_autofree char *text = jb_get_slice(J.buf, &s, &e, TRUE);
         if (strstr(text, OBJ_UTF8))
             continue; /* image lines are left alone */
         int before = ctx.n;
         g_autofree char *out = g_regex_replace_eval(re, text, -1, 0, 0, sub_eval, &ctx, NULL);
         if (out && ctx.n > before && !g_str_equal(out, text)) {
-            gtk_text_buffer_delete(J.buf, &s, &e);
-            gtk_text_buffer_insert(J.buf, &s, out, -1);
+            jb_delete(J.buf, &s, &e);
+            jb_insert(J.buf, &s, out, -1);
             lines_changed++;
             last_changed = line;
             int added = 0; /* the replacement may have added lines (\n) */
@@ -1546,14 +1546,14 @@ static void substitute(const char *pat, const char *vim_rep, const char *flags, 
             last += added;
         }
     }
-    gtk_text_buffer_end_user_action(J.buf);
+    jb_end_user_action(J.buf);
     if (!ctx.n) {
         g_autofree char *msg = g_strdup_printf("E486: Pattern not found: %s", pat);
         vim_message(msg, TRUE);
         return;
     }
     if (last_changed >= 0) {
-        GtkTextIter it;
+        JotIter it;
         iter_line(&it, last_changed);
         first_nonblank(&it);
         set_cursor(&it);
@@ -1598,7 +1598,7 @@ static void ex_command(const char *raw) {
     gboolean ranged = parse_range(&p, &first, &last);
     while (*p == ' ')
         p++;
-    GtkTextIter it;
+    JotIter it;
     if (!*p) {
         if (ranged) { /* :42 */
             iter_line(&it, last);
@@ -1634,10 +1634,10 @@ static void ex_command(const char *raw) {
         ui_open_folder(notes_dir);
     } else if (g_str_equal(p, "noh") || g_str_equal(p, "nohlsearch")) {
         cursor_iter(&it);
-        gtk_text_buffer_place_cursor(J.buf, &it);
+        jb_place_cursor(J.buf, &it);
     } else if (g_str_equal(p, "e") || g_str_equal(p, "e!") || g_str_equal(p, "edit") || g_str_equal(p, "edit!")) {
         cursor_iter(&it);
-        int line = gtk_text_iter_get_line(&it);
+        int line = jb_iter_get_line(&it);
         load_page();
         iter_line(&it, line);
         first_nonblank(&it);
@@ -1664,11 +1664,11 @@ static void ex_command(const char *raw) {
         }
     } else if (g_str_equal(p, "d") || g_str_equal(p, "delete") || g_str_equal(p, "y") || g_str_equal(p, "yank") ||
                g_str_equal(p, ">") || g_str_equal(p, "<") || g_str_equal(p, "j") || g_str_equal(p, "join")) {
-        GtkTextIter s, e;
+        JotIter s, e;
         iter_line(&s, first);
         iter_line(&e, last);
         to_line_end(&e);
-        gtk_text_iter_forward_char(&e);
+        jb_iter_forward_char(&e);
         Range r = {offset_of(&s), offset_of(&e), TRUE};
         if (*p == 'j')
             join_lines(first, MAX(1, last - first));
@@ -1698,7 +1698,7 @@ static Res exec_with_count(int count, const char *keys) {
 static Res visual_command(gunichar c, const char **pp, int count) {
     Range r;
     visual_range(&r);
-    GtkTextIter it;
+    JotIter it;
     switch (c) {
     case 'd':
     case 'x':
@@ -1706,12 +1706,12 @@ static Res visual_command(gunichar c, const char **pp, int count) {
     case 'X':
     case 'D':
         if (c == 'X' || c == 'D') { /* linewise */
-            GtkTextIter s, e;
+            JotIter s, e;
             iter_at(&s, r.s);
             iter_at(&e, r.e > r.s ? r.e - 1 : r.e);
-            gtk_text_iter_set_line_offset(&s, 0);
+            jb_iter_set_line_offset(&s, 0);
             to_line_end(&e);
-            gtk_text_iter_forward_char(&e);
+            jb_iter_forward_char(&e);
             r = (Range){offset_of(&s), offset_of(&e), TRUE};
         }
         exit_visual(r.s);
@@ -1721,7 +1721,7 @@ static Res visual_command(gunichar c, const char **pp, int count) {
     case 'Y':
         exit_visual(r.s);
         apply_op('y', &r);
-        GtkTextIter s;
+        JotIter s;
         iter_at(&s, r.s);
         set_cursor(&s);
         return R_DONE;
@@ -1743,9 +1743,9 @@ static Res visual_command(gunichar c, const char **pp, int count) {
         return R_DONE;
     case 'J': {
         iter_at(&it, r.s);
-        int first = gtk_text_iter_get_line(&it);
+        int first = jb_iter_get_line(&it);
         iter_at(&it, MAX(r.s, r.e - 1));
-        int last = gtk_text_iter_get_line(&it);
+        int last = jb_iter_get_line(&it);
         exit_visual(r.s);
         join_lines(first, MAX(1, last - first));
         return R_DONE;
@@ -1756,10 +1756,10 @@ static Res visual_command(gunichar c, const char **pp, int count) {
         put(TRUE, count);
         return R_DONE;
     case 'o': {
-        GtkTextIter a, v;
-        gtk_text_buffer_get_iter_at_mark(J.buf, &a, V.anchor);
-        gtk_text_buffer_get_iter_at_mark(J.buf, &v, V.vcur);
-        gtk_text_buffer_move_mark(J.buf, V.anchor, &v);
+        JotIter a, v;
+        jb_get_iter_at_mark(J.buf, &a, V.anchor);
+        jb_get_iter_at_mark(J.buf, &v, V.vcur);
+        jb_move_mark(J.buf, V.anchor, &v);
         set_cursor(&a);
         return R_DONE;
     }
@@ -1785,12 +1785,12 @@ static Res visual_command(gunichar c, const char **pp, int count) {
         Res res = text_object(pp, c, &tr);
         if (res != R_DONE)
             return res;
-        GtkTextIter s, e;
+        JotIter s, e;
         iter_at(&s, tr.s);
         iter_at(&e, tr.e > tr.s ? tr.e - 1 : tr.e);
         if (tr.linewise && V.mode != MODE_VISUAL_LINE)
             set_mode(MODE_VISUAL_LINE);
-        gtk_text_buffer_move_mark(J.buf, V.anchor, &s);
+        jb_move_mark(J.buf, V.anchor, &s);
         set_cursor(&e);
         return R_DONE;
     }
@@ -1806,7 +1806,7 @@ static Res vim_exec(const char *keys) {
     const char *cmd_start = p;
     gunichar c = next_char(&p);
     int n = MAX(count, 1);
-    GtkTextIter cur, it;
+    JotIter cur, it;
     get_cursor(&cur);
     gboolean vis = is_visual();
 
@@ -1832,14 +1832,14 @@ static Res vim_exec(const char *keys) {
         gunichar m = g_utf8_get_char(p);
         Range r;
         if (m == c) { /* dd yy cc >> << */
-            int line = gtk_text_iter_get_line(&cur);
+            int line = jb_iter_get_line(&cur);
             if (line + total - 1 >= line_count() && c != 'y' && total > 1)
                 total = line_count() - line;
-            GtkTextIter s, e;
+            JotIter s, e;
             iter_line(&s, line);
             iter_line(&e, line + total - 1);
             to_line_end(&e);
-            gtk_text_iter_forward_char(&e);
+            jb_iter_forward_char(&e);
             r = (Range){offset_of(&s), offset_of(&e), TRUE};
         } else if (m == 'i' || m == 'a') {
             p = g_utf8_next_char(p);
@@ -1848,14 +1848,14 @@ static Res vim_exec(const char *keys) {
                 return tr;
         } else if (c == 'c' && (m == 'w' || m == 'W') && cls_at(&cur, m == 'W')) {
             /* cw is ce (but a word's last char changes just that char) */
-            GtkTextIter e = cur;
+            JotIter e = cur;
             for (int i = 0; i < total; i++)
                 if (i || !at_word_end(&e, m == 'W'))
                     word_end(&e, m == 'W');
             Motion mi = {.inclusive = TRUE};
             make_range(cur, e, &mi, &r);
         } else {
-            GtkTextIter e = cur;
+            JotIter e = cur;
             Motion mi;
             Res mr = motion(&p, counted ? total : 0, c, &e, &mi);
             if (mr != R_DONE)
@@ -1871,8 +1871,8 @@ static Res vim_exec(const char *keys) {
             enter_insert(&cur);
             return R_DONE;
         case 'a':
-            if (!gtk_text_iter_ends_line(&cur))
-                gtk_text_iter_forward_char(&cur);
+            if (!jb_iter_ends_line(&cur))
+                jb_iter_forward_char(&cur);
             enter_insert(&cur);
             return R_DONE;
         case 'I':
@@ -1889,10 +1889,10 @@ static Res vim_exec(const char *keys) {
             return R_DONE;
         case 'x':
         case 's': {
-            GtkTextIter e = cur;
-            for (int i = 0; i < n && !gtk_text_iter_ends_line(&e); i++)
-                gtk_text_iter_forward_char(&e);
-            if (gtk_text_iter_equal(&e, &cur)) {
+            JotIter e = cur;
+            for (int i = 0; i < n && !jb_iter_ends_line(&e); i++)
+                jb_iter_forward_char(&e);
+            if (jb_iter_equal(&e, &cur)) {
                 if (c == 's')
                     enter_insert(&cur);
                 return c == 's' ? R_DONE : R_BAD;
@@ -1902,10 +1902,10 @@ static Res vim_exec(const char *keys) {
             return R_DONE;
         }
         case 'X': {
-            GtkTextIter s = cur;
-            for (int i = 0; i < n && !gtk_text_iter_starts_line(&s); i++)
-                gtk_text_iter_backward_char(&s);
-            if (gtk_text_iter_equal(&s, &cur))
+            JotIter s = cur;
+            for (int i = 0; i < n && !jb_iter_starts_line(&s); i++)
+                jb_iter_backward_char(&s);
+            if (jb_iter_equal(&s, &cur))
                 return R_BAD;
             Range r = {offset_of(&s), offset_of(&cur), FALSE};
             apply_op('d', &r);
@@ -1928,29 +1928,29 @@ static Res vim_exec(const char *keys) {
         case CTRL('r'): {
             gboolean undo = c == 'u';
             for (int i = 0; i < n; i++) {
-                if (undo ? !gtk_text_buffer_get_can_undo(J.buf) : !gtk_text_buffer_get_can_redo(J.buf)) {
+                if (undo ? !jb_get_can_undo(J.buf) : !jb_get_can_redo(J.buf)) {
                     vim_message(undo ? "Already at oldest change" : "Already at newest change", FALSE);
                     break;
                 }
-                undo ? gtk_text_buffer_undo(J.buf) : gtk_text_buffer_redo(J.buf);
+                undo ? jb_undo(J.buf) : jb_redo(J.buf);
             }
             cursor_iter(&it);
             set_cursor(&it);
             return R_DONE;
         }
         case 'J':
-            return join_lines(gtk_text_iter_get_line(&cur), MAX(1, n - 1)) ? R_DONE : R_BAD;
+            return join_lines(jb_iter_get_line(&cur), MAX(1, n - 1)) ? R_DONE : R_BAD;
         case 'r': {
             if (!*p)
                 return R_MORE;
             gunichar t = next_char(&p);
             if (t == K_ESC)
                 return R_DONE;
-            GtkTextIter e = cur;
+            JotIter e = cur;
             for (int i = 0; i < n; i++)
-                if (gtk_text_iter_ends_line(&e) || !gtk_text_iter_forward_char(&e))
+                if (jb_iter_ends_line(&e) || !jb_iter_forward_char(&e))
                     return R_BAD;
-            if (gtk_text_iter_ends_line(&cur))
+            if (jb_iter_ends_line(&cur))
                 return R_BAD;
             GString *rep = g_string_new(NULL);
             if (t == K_CR)
@@ -1959,19 +1959,19 @@ static Res vim_exec(const char *keys) {
                 for (int i = 0; i < n; i++)
                     g_string_append_unichar(rep, t);
             int off = offset_of(&cur);
-            gtk_text_buffer_begin_user_action(J.buf);
-            gtk_text_buffer_delete(J.buf, &cur, &e);
-            gtk_text_buffer_insert(J.buf, &cur, rep->str, -1);
-            gtk_text_buffer_end_user_action(J.buf);
+            jb_begin_user_action(J.buf);
+            jb_delete(J.buf, &cur, &e);
+            jb_insert(J.buf, &cur, rep->str, -1);
+            jb_end_user_action(J.buf);
             iter_at(&it, t == K_CR ? off + 1 : off + n - 1);
             set_cursor(&it);
             g_string_free(rep, TRUE);
             return R_DONE;
         }
         case '~': {
-            GtkTextIter e = cur;
-            for (int i = 0; i < n && !gtk_text_iter_ends_line(&e); i++)
-                gtk_text_iter_forward_char(&e);
+            JotIter e = cur;
+            for (int i = 0; i < n && !jb_iter_ends_line(&e); i++)
+                jb_iter_forward_char(&e);
             Range r = {offset_of(&cur), offset_of(&e), FALSE};
             set_case(&r, '~');
             iter_at(&it, r.e);
@@ -2038,7 +2038,7 @@ static Res vim_exec(const char *keys) {
         double align = (d == 'z' || d == '.') ? 0.5 : (d == 't' || d == K_CR) ? 0.0 : (d == 'b' || d == '-') ? 1.0 : -1;
         if (align < 0)
             return R_BAD;
-        GtkTextMark *m = vis ? V.vcur : gtk_text_buffer_get_insert(J.buf);
+        JotMark *m = vis ? V.vcur : jb_get_insert(J.buf);
         ui_scroll_mark_to(m, align);
         return R_DONE;
     }
@@ -2058,9 +2058,9 @@ static Res vim_exec(const char *keys) {
         if (!*p)
             return R_MORE;
         if (g_utf8_get_char(p) == 'x') { /* gx: open the image or link under the cursor */
-            GdkPaintable *img = gtk_text_iter_get_paintable(&cur);
-            if (JOT_IS_IMAGE(img))
-                open_image(JOT_IMAGE(img));
+            JotImage *img = jb_iter_get_image(&cur);
+            if (img)
+                open_image(img);
             else if (!md_open_url_at(&cur))
                 vim_message("gx: no link or image under the cursor", TRUE);
             return R_DONE;
@@ -2099,23 +2099,23 @@ static void vim_input(gunichar c) {
         return;
     }
     if (V.mode == MODE_NORMAL) {
-        GtkTextIter s, e;
-        if (gtk_text_buffer_get_selection_bounds(J.buf, &s, &e)) {
-            GtkTextIter ins;
+        JotIter s, e;
+        if (jb_get_selection_bounds(J.buf, &s, &e)) {
+            JotIter ins;
             cursor_iter(&ins);
             if (V.search_hl) {
-                gtk_text_buffer_place_cursor(J.buf, &ins); /* drop the match highlight */
+                jb_place_cursor(J.buf, &ins); /* drop the match highlight */
             } else {
                 /* A selection made with the mouse: carry on in visual mode. */
-                gboolean ins_at_end = gtk_text_iter_equal(&ins, &e);
-                GtkTextIter v = ins_at_end ? e : s;
+                gboolean ins_at_end = jb_iter_equal(&ins, &e);
+                JotIter v = ins_at_end ? e : s;
                 if (ins_at_end)
-                    gtk_text_iter_backward_char(&v);
+                    jb_iter_backward_char(&v);
                 enter_visual(MODE_VISUAL, ins_at_end ? &s : &e, &v);
                 if (!ins_at_end) {
-                    GtkTextIter a = e;
-                    gtk_text_iter_backward_char(&a);
-                    gtk_text_buffer_move_mark(J.buf, V.anchor, &a);
+                    JotIter a = e;
+                    jb_iter_backward_char(&a);
+                    jb_move_mark(J.buf, V.anchor, &a);
                     set_cursor(&v);
                 }
             }
@@ -2134,19 +2134,19 @@ static void vim_input(gunichar c) {
 
 /* Insert mode: Ctrl+W deletes the word before the cursor, Ctrl+U back to the indent. */
 static void insert_delete_back(gboolean word) {
-    GtkTextIter cur, s;
+    JotIter cur, s;
     cursor_iter(&cur);
     s = cur;
     if (word) {
         word_back(&s, FALSE);
     } else {
         first_nonblank(&s);
-        if (gtk_text_iter_compare(&s, &cur) >= 0)
-            gtk_text_iter_set_line_offset(&s, 0);
+        if (jb_iter_compare(&s, &cur) >= 0)
+            jb_iter_set_line_offset(&s, 0);
     }
-    if (gtk_text_iter_equal(&s, &cur) && !gtk_text_iter_is_start(&s))
-        gtk_text_iter_backward_char(&s);
-    gtk_text_buffer_delete(J.buf, &s, &cur);
+    if (jb_iter_equal(&s, &cur) && !jb_iter_is_start(&s))
+        jb_iter_backward_char(&s);
+    jb_delete(J.buf, &s, &cur);
 }
 
 /* TRUE = handled (in normal/visual mode that's every key that would otherwise type or edit). */
@@ -2200,9 +2200,9 @@ gboolean vim_key(JotKey key, gunichar ch, gboolean ctrl) {
 /* Setup                                                                      */
 /* ------------------------------------------------------------------------- */
 
-static void on_vim_mark_set(GtkTextBuffer *buf, GtkTextIter *it, GtkTextMark *mark, gpointer unused) {
+static void on_vim_mark_set(JotBuf *buf, JotIter *it, JotMark *mark, gpointer unused) {
     (void)buf, (void)it, (void)unused;
-    if (mark == gtk_text_buffer_get_insert(J.buf) || mark == V.vcur)
+    if (mark == jb_get_insert(J.buf) || mark == V.vcur)
         update_status();
 }
 
@@ -2231,11 +2231,11 @@ void vim_init(void) {
         V.pending = g_string_new(NULL);
         V.history = g_ptr_array_new_with_free_func(g_free);
         V.want_col = -1;
-        g_signal_connect(J.buf, "mark-set", G_CALLBACK(on_vim_mark_set), NULL);
-        g_signal_connect_swapped(J.buf, "changed", G_CALLBACK(update_status), NULL);
+        jb_connect(J.buf, "mark-set", G_CALLBACK(on_vim_mark_set), NULL);
+        jb_connect_swapped(J.buf, "changed", G_CALLBACK(update_status), NULL);
     }
     set_mode(MODE_NORMAL);
-    GtkTextIter it;
+    JotIter it;
     cursor_iter(&it);
     set_cursor(&it);
 }

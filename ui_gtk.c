@@ -235,6 +235,52 @@ void ui_clipboard_read(void *request) {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Colors (follow light/dark and the accent color)                            */
+/* ------------------------------------------------------------------------- */
+
+static JotTag **md_tags;
+
+static void md_colors(void) {
+    AdwStyleManager *sm = adw_style_manager_get_default();
+    gboolean dark = adw_style_manager_get_dark(sm);
+    GdkRGBA accent;
+    adw_accent_color_to_standalone_rgba(adw_style_manager_get_accent_color(sm), dark, &accent);
+    GdkRGBA ink = dark ? (GdkRGBA){1, 1, 1, 1} : (GdkRGBA){0, 0, 0, 1};
+    GdkRGBA dim = ink, quote = ink, chip = ink, block = ink;
+    dim.alpha = 0.40f;
+    quote.alpha = 0.70f;
+    chip.alpha = dark ? 0.10f : 0.07f;
+    block.alpha = dark ? 0.06f : 0.04f;
+    g_object_set(md_tags[T_DIM], "foreground-rgba", &dim, NULL);
+    g_object_set(md_tags[T_DONE], "foreground-rgba", &dim, NULL);
+    g_object_set(md_tags[T_QUOTE], "foreground-rgba", &quote, NULL);
+    g_object_set(md_tags[T_CODE], "background-rgba", &chip, NULL);
+    g_object_set(md_tags[T_CODEBLOCK], "paragraph-background-rgba", &block, NULL);
+    g_object_set(md_tags[T_HEADING], "foreground-rgba", &accent, NULL);
+    g_object_set(md_tags[T_BULLET], "foreground-rgba", &accent, NULL);
+    g_object_set(md_tags[T_QUOTE_MARK], "foreground-rgba", &accent, NULL);
+    g_object_set(md_tags[T_LINK], "foreground-rgba", &accent, NULL);
+}
+
+static void on_md_style(AdwStyleManager *sm, GParamSpec *ps, gpointer unused) {
+    (void)sm, (void)ps, (void)unused;
+    md_colors();
+}
+
+void ui_md_style(JotTag **tags) {
+    md_tags = tags;
+    g_object_set(md_tags[T_HEADING], "weight", PANGO_WEIGHT_BOLD, NULL);
+    g_object_set(md_tags[T_BOLD], "weight", PANGO_WEIGHT_BOLD, NULL);
+    g_object_set(md_tags[T_ITALIC], "style", PANGO_STYLE_ITALIC, NULL);
+    g_object_set(md_tags[T_LINK], "underline", PANGO_UNDERLINE_SINGLE, NULL);
+    g_object_set(md_tags[T_DONE], "strikethrough", TRUE, NULL);
+    md_colors();
+    AdwStyleManager *sm = adw_style_manager_get_default();
+    g_signal_connect(sm, "notify::dark", G_CALLBACK(on_md_style), NULL);
+    g_signal_connect(sm, "notify::accent-color", G_CALLBACK(on_md_style), NULL);
+}
+
+/* ------------------------------------------------------------------------- */
 /* Setup                                                                      */
 /* ------------------------------------------------------------------------- */
 
