@@ -1,4 +1,4 @@
-<img src="data/dev.jot.Jot.svg" alt="jot's icon: a worn-out 1980s game cartridge labeled JOT" align="right" width="128">
+<img src="data/dev.jot.Jot.svg" alt="jot's icon: a white lowercase j with a yellow dot" align="right" width="128">
 
 # jot
 
