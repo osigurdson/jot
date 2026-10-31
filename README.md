@@ -2,9 +2,9 @@
 
 # jot
 
-A tiny, fast, local, vim like scratch pad. Paste in text and images and search both (requires tesseract for image search - see install instructions below). It's 100% vibe coded primarily for my own use but feel free to use it. 
+A tiny, local, vim-like scratch pad. Paste in text and images and search both (requires tesseract for image search - see install instructions below). It's 100% vibe coded primarily for my own use but feel free to use it. 
 
-![jot in use: typing a note in vim style, pasting a screenshot of a compiler error, then searching for "u32" and seeing the matches highlighted inside the image](docs/demo.gif)
+![jot in use: typing a note in vim style, pasting a screenshot of a latency dashboard, then searching for "checkout" and stepping through matches in the notes and inside the image](docs/demo.gif)
 
 ## Install
 
@@ -48,18 +48,6 @@ Run `jot`. It opens your page in normal mode, with the cursor at the end.
 
 Click an image, or move the cursor onto it, to select it. Then `gx` opens it, `yy` copies it, and `dd` deletes it.
 
-### Pages
-
-Each page is a folder, so you can keep separate ones for separate work:
-
-```sh
-jot               # your default page, ~/Documents/jot/default
-jot work          # another page, ~/Documents/jot/work
-jot ./scratch     # a page in any folder, such as inside a repo
-```
-
-Each page gets its own window. Set `$JOT_DIR` to use a different default page.
-
 ## Where does it put stuff?
 
 ```
@@ -77,7 +65,7 @@ You can grep the folder, edit `jot.md` in another editor, or keep it in git. If 
 
 ## Using it with coding agents
 
-Because a page is plain files, a coding agent can read it directly. AGENTS.md / CLAUDE.md are included which describe the structure to save time / tokens.
+Since the page is just text and OCR info is available, a coding agent can read it directly. AGENTS.md / CLAUDE.md are included which describe the structure to save time / tokens.
 
 ```sh
 cd ~/Documents/jot/default
@@ -85,7 +73,7 @@ claude
 ```
 ## How it differs from vim
 
-Most of what you'd expect works: motions, counts, operators, text objects, visual mode, `/` search, `:s` and more. See the **[key reference](docs/keys.md)** for the full list. The main differences:
+This is definitely *not* meant to be a vim / nvim replacement. However, the key bindings and flow should generally feel the same. Most of what you'd expect works: motions, counts, operators, text objects, visual mode, `/` search, `:s` and more. See the **[key reference](docs/keys.md)** for the full list. The main differences:
 
 - `y`, `d` and `p` always use the system clipboard, like `clipboard=unnamedplus`.
 - `Ctrl+V` pastes instead of starting block visual mode, which jot doesn't have.
