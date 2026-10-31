@@ -2,13 +2,7 @@
 
 # jot
 
-Here is the idea: 
-1. You use vim / nvim
-2. You need to take quick / scratch notes but aren't ready to organize them yet. 
-3. Sometimes you need to take screen captures - not everything is text
-4. You want to be able to search the text and the images (using a radical new technology called O.C.R.). Note that you need to install Tesseract for that (see below).
-
-Well, that is what this thing does. It is a tiny (< 1MiB) 100% local UI app (Linux only atm) written in C. It is vibed coded but so far works well enough for me. 
+A tiny, fast, local, vim like scratch pad. Paste in text and images and search both (requires tesseract for image search - see install instructions below). It's 100% vibe coded primarily for my own use but feel free to use it. 
 
 ![jot in use: typing a note in vim style, pasting a screenshot of a compiler error, then searching for "u32" and seeing the matches highlighted inside the image](docs/demo.gif)
 
@@ -50,7 +44,7 @@ Run `jot`. It opens your page in normal mode, with the cursor at the end.
 1. **Write a note:** press `o`, type, then press `Esc`.
 2. **Add a screenshot:** copy one to the clipboard, then press `p`. It lands on its own line below the cursor.
 3. **Find something:** press `/` and type. This also finds text inside your screenshots.
-4. **Leave:** type `:q`. There's nothing to save, because jot saves as you type.
+4. **Leave:** type `:q`. There's nothing to save, because jot saves as you type. Of course, its a GUI app so you can just click the x as well.
 
 Click an image, or move the cursor onto it, to select it. Then `gx` opens it, `yy` copies it, and `dd` deletes it.
 
@@ -66,15 +60,7 @@ jot ./scratch     # a page in any folder, such as inside a repo
 
 Each page gets its own window. Set `$JOT_DIR` to use a different default page.
 
-## Features
-
-- **Screenshots in the text.** Paste them or drag them in. They show at their real size and shrink to fit the window.
-- **Search inside images.** With Tesseract installed, jot reads each screenshot once, on your machine, and highlights matches in the picture. Right-click an image to copy its text. The status bar shows `indexing image…` while a read is running.
-- **Always plain text.** Everything is in your monospace font at one size, and pasted text never brings formatting with it.
-- **Light Markdown styling.** Headings, code, lists and links get color and weight, but every character stays visible and editable. Pasted code stays plain. `:set nomd` turns it off.
-- **Small and native.** It's a compact C program that uses your system's GTK.
-
-## Your notes are just files
+## Where does it put stuff?
 
 ```
 ~/Documents/jot/default/
@@ -91,15 +77,12 @@ You can grep the folder, edit `jot.md` in another editor, or keep it in git. If 
 
 ## Using it with coding agents
 
-Because a page is plain files, a coding agent can read it directly. That's useful when you've been deep in a problem and want help making sense of your notes:
+Because a page is plain files, a coding agent can read it directly. AGENTS.md / CLAUDE.md are included which describe the structure to save time / tokens.
 
 ```sh
 cd ~/Documents/jot/default
 claude
 ```
-
-Then ask something like "what was I working on?" or "explain the error in my last screenshot". Each new page includes an `AGENTS.md` that explains the layout to the agent and tells it to leave your notes alone unless you ask it to change them. Claude Code reads it through `CLAUDE.md`, and other agents that support `AGENTS.md` can read it directly.
-
 ## How it differs from vim
 
 Most of what you'd expect works: motions, counts, operators, text objects, visual mode, `/` search, `:s` and more. See the **[key reference](docs/keys.md)** for the full list. The main differences:
